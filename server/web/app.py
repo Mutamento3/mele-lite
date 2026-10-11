@@ -14,13 +14,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 import memory as M
 from brain import accounts, archive, drawer, far_dates, ledger, rewind
-from brain.persona import Persona, persona_cost, render_base
+from brain.persona import Persona, persona_cost
 from brain.settings import Settings
-from brain.tools import tool_specs
 from brain.scope import Scope
-from brain.turn import Deps, get_adapter, run_turn
+from brain.turn import Deps, run_turn
 from api.rooms import Rooms
-from llm.cachecheck import cache_check
 from patrol import store as clock_store
 from patrol.clocks import next_fire, patrol_numbers, validate_spec
 from patrol.estimate import levels_table
@@ -146,14 +144,6 @@ def create_app(deps: Deps, scope: Scope | UUID) -> FastAPI:
     async def delete_memory(memory_id: int):
         return {"deleted": await M.delete(deps.pool, sc().companion, memory_id)
                 or await M.delete(deps.pool, sc().account, memory_id)}      # 人物卡在账号名下
-
-    @app.post("/api/cache-check")
-    async def check():
-        s = await settings()
-        route = deps.keys.route_for(sc().account)
-        persona = Persona.from_dict(await archive.get_persona(deps.pool, sc().companion), s.lang)
-        return await cache_check(get_adapter(deps, route), route.chat_model,
-                                 render_base(persona, [], s.lang, relationship=s.relationship), tool_specs())
 
     # ── 联系人 / 窗口 / 无痕 / 倒回（09-27 Aporia加的，测试台先有，正式接口第 4 步做） ──
 

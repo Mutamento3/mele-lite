@@ -98,8 +98,7 @@ details.wake div{white-space:pre-wrap;padding:6px 10px;margin-top:4px;background
     <textarea id="s_inj" spellcheck="false"></textarea>
     <h4>导入人设（可选，会替换出厂角色）</h4>
     <textarea id="p_import"></textarea><small id="p_cost" style="color:var(--muted)"></small>
-    <p><button id="save" type="button">保存</button> <button id="cache" type="button" style="background:var(--card);color:var(--ink)">缓存体检</button></p>
-    <pre id="cacheOut" style="display:none"></pre>
+    <p><button id="save" type="button">保存</button></p>
   </section>
   <section id="dd">
     <h4>它记着的日子（TA 看得见）</h4><div id="dd_dates"></div>
@@ -337,12 +336,6 @@ $("save").onclick = async () => {
   const pr = await r2.json();
   $("p_cost").textContent = pr.import_cost_usd ? `这份人设每轮大概多花 $${pr.import_cost_usd[0].toFixed(5)}（走缓存）～ $${pr.import_cost_usd[1].toFixed(5)}（没走缓存）` : "";
   await loadState(false);
-};
-$("cache").onclick = async () => {
-  if (!confirm("缓存体检会真的调两次模型，花一点点钱（一般不到一分钱）。继续吗？")) return;
-  const out = $("cacheOut"); out.style.display = "block"; out.textContent = "体检中…";
-  const r = await (await fetch("/api/cache-check", {method: "POST"})).json();
-  out.textContent = ({hit: "✅ 命中了", miss: "⚠️ 没命中", unknown: "❔ 这次没测出来"})[r.result] + "\n" + r.reason;
 };
 // ── 远事 · 抽屉栏 ──
 const PHASE = {eve: "前一晚", day: "当天", after: "第二天"};

@@ -1,6 +1,5 @@
 import pytest
 
-from llm.cachecheck import cache_check
 from llm.errors import LLMError
 from llm.fake import FakeModel
 from llm.keys import FileKeys
@@ -77,24 +76,3 @@ def test_make_adapter_rejects_unknown_provider():
         make_adapter(Route(provider="nope", api_key="k", chat_model="m", ledger_model="m"))
 
 
-async def test_cache_check_hit():
-    f = FakeModel([{"text": "好", "usage": Usage(input=2000)},
-                   {"text": "好", "usage": Usage(input=10, cache_read=1990)}])
-    assert (await cache_check(f, "m", "sys", []))["result"] == "hit"
-
-
-async def test_cache_check_miss():
-    f = FakeModel([{"text": "好", "usage": Usage(input=2000)}, {"text": "好", "usage": Usage(input=2000)}])
-    assert (await cache_check(f, "m", "sys", []))["result"] == "miss"
-
-
-async def test_cache_check_unknown_when_not_reported():
-    u = Usage(input=2000, cache_known=False)
-    f = FakeModel([{"text": "好", "usage": u}, {"text": "好", "usage": u}])
-    assert (await cache_check(f, "m", "sys", []))["result"] == "unknown"
-
-
-async def test_cache_check_unknown_when_request_failed():
-    f = FakeModel([LLMError("auth")])
-    res = await cache_check(f, "m", "sys", [])
-    assert res["result"] == "unknown" and "auth" in res["reason"]

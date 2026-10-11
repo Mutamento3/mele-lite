@@ -1,7 +1,7 @@
 """用户设置。存成 JSON；读的时候认不得的键丢掉、缺的补默认、非法的值报错。
 
 以后 app 的设置页分两层（设计文档「记给以后几块的」）：
-外层 = 名字、性格、联想强弱、记性长度；里层「高级」= 细读、注入、哨兵、最多几条、缓存体检。"""
+外层 = 名字、性格、联想强弱、记性长度；里层「高级」= 细读、注入、哨兵、最多几条。"""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields

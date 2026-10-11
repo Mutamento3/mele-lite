@@ -71,13 +71,6 @@ async def test_persona_saved_and_state_shape(pool, user_a):
     assert s["model"] == {"provider": "fake", "chat": "fake-chat", "ledger": "fake-ledger", "age": "fake-ledger"}
 
 
-async def test_cache_check_endpoint(pool, user_a):
-    model = FakeModel([{"text": "好", "usage": Usage(input=2000)}, {"text": "好", "usage": Usage(input=5, cache_read=1995)}])
-    async with client(pool, user_a, model) as c:
-        r = (await c.post("/api/cache-check")).json()
-    assert r["result"] == "hit" and model.requests[0].system[0].text.startswith("你是一个住在手机 app 里的 AI 伙伴")
-
-
 async def test_memories_page_and_api_show_everything_and_delete(pool, user_a):
     import memory as M
     e = FakeEmbedder()
