@@ -109,12 +109,13 @@ final class LocalStore: @unchecked Sendable {
     @discardableResult
     func addMessage(_ conv: String, role: String, text: String, thinking: String = "", thinkingMs: Int? = nil,
                     parts: [String]? = nil, cards: [[String: Any]] = [], attachments: [String] = [],
-                    at: Date = Date()) -> [String: Any] {
+                    innerVoice: String = "", at: Date = Date()) -> [String: Any] {
         lock.withLock {
             var m: [String: Any] = ["id": nextID("message"), "role": role, "text": text, "thinking": thinking,
                                     "at": LocalStore.iso(at), "cards": cards, "attachments": attachments]
             if let parts { m["parts"] = parts }
             if let thinkingMs, !thinking.isEmpty { m["thinking_ms"] = thinkingMs }
+            if !innerVoice.isEmpty { m["inner_voice"] = innerVoice }        // 回复后的心声（10-11）
             var list = messages(conv)
             list.append(m)
             saveMessages(conv, list)

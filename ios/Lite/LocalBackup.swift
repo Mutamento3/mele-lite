@@ -102,6 +102,53 @@ enum LocalBackup {
         return out
     }
 
+    // MARK: - 删 TA 前自动留一份（10-11 Aporia在 TA 设定里误删了一个 Lumi，没备份找不回来）
+
+    /// 放在 Application Support 不放 Documents：一键备份只打包 Documents，免得备份里套备份越滚越大
+    static var autoDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("auto-backups", isDirectory: true)
+    }
+    static let autoKeep = 3
+
+    struct AutoBackup: Identifiable {
+        let url: URL
+        let who: String
+        let date: Date
+        let bytes: Int64
+        var id: String { url.lastPathComponent }
+    }
+
+    /// 删 TA 之前整个打一份（不带钥匙：钥匙在钥匙串里，同一台手机恢复不受影响），只留最近 3 份
+    static func autoBackup(before who: String) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: autoDir, withIntermediateDirectories: true)
+        let tmp = try export(includeKeys: false)
+        let stamp = Int(Date().timeIntervalSince1970)
+        let dest = autoDir.appendingPathComponent("before-delete-\(stamp).\(ext)")
+        try? fm.removeItem(at: dest)
+        try fm.moveItem(at: tmp, to: dest)
+        let meta = try JSONSerialization.data(withJSONObject: ["who": who, "at": stamp])
+        try meta.write(to: dest.deletingPathExtension().appendingPathExtension("json"))
+        for old in autoBackups().dropFirst(autoKeep) {
+            try? fm.removeItem(at: old.url)
+            try? fm.removeItem(at: old.url.deletingPathExtension().appendingPathExtension("json"))
+        }
+    }
+
+    /// 新的在前
+    static func autoBackups() -> [AutoBackup] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(at: autoDir, includingPropertiesForKeys: [.fileSizeKey]) else { return [] }
+        return names.filter { $0.pathExtension == ext }.compactMap { u in
+            let meta = (try? Data(contentsOf: u.deletingPathExtension().appendingPathExtension("json")))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            let at = (meta["at"] as? Double) ?? (try? u.resourceValues(forKeys: [.creationDateKey]).creationDate?.timeIntervalSince1970) ?? 0
+            let size = Int64((try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            return AutoBackup(url: u, who: meta["who"] as? String ?? "TA", date: Date(timeIntervalSince1970: at), bytes: size)
+        }.sorted { $0.date > $1.date }
+    }
+
     private struct Entry { let url: URL; let path: String; let size: Int64 }
 
     private static func allFiles() -> [Entry] {

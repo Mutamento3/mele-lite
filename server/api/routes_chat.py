@@ -89,7 +89,7 @@ async def events(conv: UUID, request: Request, acc: UUID = Depends(account), a: 
 
 def _msg(m: archive.StoredMsg) -> dict:
     return {"id": m.id, "role": m.role, "text": m.text, "thinking": m.thinking, "thinking_ms": m.thinking_ms,
-            "at": m.created_at.isoformat()}
+            "inner_voice": m.inner_voice, "at": m.created_at.isoformat()}
 
 
 @router.get("/conversations/{conv}/messages")

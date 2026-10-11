@@ -18,6 +18,8 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS parts JSONB;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS cards JSONB;
 -- 这一轮想了多久（毫秒，从开口到说完；10-05 Aporia：App 写「思考了 x 秒」）。早先的消息是 NULL
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS thinking_ms INT;
+-- 回复后的心声（10-11）：说完以后它最后写的那几行心里话，App 画成这一轮最后一张小卡片；下一轮接在它那句后面进历史
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS inner_voice TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS ledger_days (           -- 账本：按天存，近的清楚、远的模糊
   user_id    UUID        NOT NULL,

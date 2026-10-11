@@ -13,10 +13,10 @@ def lines(settings, f, seed=0):
 
 
 def test_thinking_style_every_turn_and_override():
-    first = lines(Settings(), facts())[0]
-    assert first.startswith("〔想事的时候〕\n这里的念头不用好看") and TEXTS["zh"]["think_lang"] not in lines(Settings(), facts())
+    first = lines(Settings(), facts(turn=3))[0]
+    assert first.startswith("〔想事的时候〕\n这里的念头不用好看") and TEXTS["zh"]["think_lang"] not in lines(Settings(), facts(turn=3))
     s = Settings(thinking_style_text="〔想事〕先想三秒。")
-    got = lines(s, facts())
+    got = lines(s, facts(turn=3))
     assert got[0] == "〔想事〕先想三秒。" and TEXTS["zh"]["think_lang"] in got      # 自己写的风格：另贴〔用中文想〕
 
 
@@ -78,7 +78,7 @@ def test_disabled_or_empty_injections_skipped_and_order_kept():
 
 
 def test_english_texts():
-    assert lines(Settings(lang="en"), facts())[0].startswith("〔How I think〕\nThoughts in here")
+    assert lines(Settings(lang="en"), facts(turn=3))[0].startswith("〔How I think〕\nThoughts in here")
 
 
 def test_remembered_counts_note_about_user_too():
@@ -97,16 +97,16 @@ def test_no_draft_line_only_when_asked():
     assert "想完就说，不在心里打草稿" in thinking_style(Settings(), no_draft=True)
     assert "打草稿" not in thinking_style(Settings())
     assert "no drafting" in thinking_style(Settings(lang="en"), no_draft=True)
-    assert "打草稿" in reminder_lines(Settings(), facts(), random.Random(0), no_draft=True)[0]
+    assert "打草稿" in reminder_lines(Settings(), facts(turn=3), random.Random(0), no_draft=True)[0]
 
 
 def test_split_thinking_pulls_style_lines_out():
     from brain.inject import split_thinking
     s = Settings(sentinels={"thinking_style": True, "tool_reminder": True}, tool_reminder_every=1)
-    before, think = split_thinking(lines(s, facts()), s)
+    before, think = split_thinking(lines(s, facts(turn=3)), s)
     assert len(think) == 1 and think[0].startswith("〔想事的时候〕") and before == [TEXTS["zh"]["tool_reminder"]]
     own = Settings(thinking_style_text="〔想事〕先想三秒。", sentinels={"thinking_style": True, "tool_reminder": False})
-    before, think = split_thinking(lines(own, facts()), own)
+    before, think = split_thinking(lines(own, facts(turn=3)), own)
     assert think == ["〔想事〕先想三秒。", TEXTS["zh"]["think_lang"]] and before == []
 
 
@@ -127,3 +127,28 @@ def test_promise_in_thinking_also_counts():
     assert any(x.startswith("〔记住了〕") for x in reminder_lines(s, f, random.Random(0)))
     f2 = TurnFacts(2, "早", "明天见。", ["memory_remember"], last_thinking="顺手记一下")
     assert not any(x.startswith("〔记住了〕") for x in reminder_lines(s, f2, random.Random(0)))
+
+
+def test_style_every_follows_setting_in_both_modes():
+    s = Settings(thinking_style_text="〔想事〕先想三秒。", thinking_style_every=3)
+    for mode in ("monologue", "native"):
+        assert "〔想事〕先想三秒。" in reminder_lines(s, facts(turn=3), random.Random(0), mode=mode)
+        assert "〔想事〕先想三秒。" not in reminder_lines(s, facts(turn=2), random.Random(0), mode=mode)
+    assert "x" in reminder_lines(Settings(thinking_style_text="x", thinking_style_every=1), facts(turn=7), random.Random(0), mode="native")
+    assert "〔想事〕先想三秒。" in reminder_lines(s, facts(turn=1), random.Random(0), mode="native")          # 原生第一轮一定贴
+    assert "〔想事〕先想三秒。" not in reminder_lines(s, facts(turn=1), random.Random(0), mode="monologue")  # 独白的风格在壹层里
+    factory = reminder_lines(Settings(), facts(turn=3), random.Random(0), mode="monologue")
+    assert any(x.startswith("〔想事的时候〕") for x in factory)
+    off = Settings(sentinels={**Settings().sentinels, "thinking_style": False})
+    assert not any(x.startswith("〔想事的时候〕") for x in reminder_lines(off, facts(turn=3), random.Random(0), mode="monologue"))
+
+
+def test_history_carries_inner_voice():
+    from datetime import datetime, timezone
+    from brain.archive import StoredMsg
+    from brain.turn import history_msgs
+    t = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    msgs = [StoredMsg(1, "user", "下地走走？", "", t), StoredMsg(2, "assistant", "好。", "", t, inner_voice="有点高兴"),
+            StoredMsg(3, "assistant", "嗯。", "", t)]
+    hist, _ = history_msgs(msgs, "zh")
+    assert [m.text for m in hist] == ["下地走走？", "好。\n\n（当时心里：有点高兴）", "嗯。"]

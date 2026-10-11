@@ -5,6 +5,14 @@ import SwiftUI
 /// 消息列表（第二块第 9 步）：一行一个联系人，点进这个人最近的窗口。
 /// 不止一个窗口时行尾「N ⌵」，点开往下列出每个窗口（长按改名 / 删）；左滑置顶 / 删除；右上「＋」加联系人。
 struct MessageListView: View {
+    /// 删 TA 的确认框最后一句（10-11）：本机模式删前自动留备份，连着 Host 的没有
+    static var deleteSafetyNote: String {
+        #if LITE
+        if Lite.local { return String(localized: "删之前会自动留一份备份，删错了去 Me → 备份 里找回。") }
+        #endif
+        return String(localized: "删了就找不回来。")
+    }
+
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var theme: AppTheme
     var onBack: () -> Void
@@ -15,6 +23,7 @@ struct MessageListView: View {
     @State private var renameDraft = ""
     @State private var deletingWindow: (CompanionDTO, ConversationDTO)?
     @State private var deletingCompanion: CompanionDTO?
+    @State private var deleteFailed: String?
     @AppStorage("notOnlyLumiSeen") private var notOnlyLumiSeen = false
     /// Lite：建小号 / 用小号加好友（10-04）
     @State private var creatingAlt = false
@@ -92,14 +101,17 @@ struct MessageListView: View {
         } message: {
             Text("这段聊天会删掉；TA 记得的事还在。")
         }
+        .alert(String(localized: "没删成"), isPresented: Binding(get: { deleteFailed != nil }, set: { if !$0 { deleteFailed = nil } })) {
+            Button(String(localized: "好")) { deleteFailed = nil }
+        } message: { Text(deleteFailed ?? "") }
         .confirmationDialog("删除这个联系人？", isPresented: Binding(get: { deletingCompanion != nil }, set: { if !$0 { deletingCompanion = nil } }),
                             titleVisibility: .visible) {
             Button("删除", role: .destructive) {
-                if let c = deletingCompanion { Task { await model.deleteCompanion(c) } }
+                if let c = deletingCompanion { Task { deleteFailed = await model.deleteCompanion(c) } }
                 deletingCompanion = nil
             }
         } message: {
-            Text("\(deletingCompanion?.name ?? "TA")的所有聊天、TA 记得的事、设定都会一起删掉，找不回来。")
+            Text("\(deletingCompanion?.name ?? "TA")的所有窗口、TA 记得的事、设定都会一起删掉。" + Self.deleteSafetyNote)
         }
     }
 
@@ -340,24 +352,35 @@ struct MessageListView: View {
     }
 
     private func windowRow(_ c: CompanionDTO, _ conv: ConversationDTO) -> some View {
-        Button { model.openChat(c, conversation: conv.id) } label: {
-            HStack(spacing: 10) {
-                Image(systemName: conv.altName.isEmpty ? "bubble.left" : "person.crop.circle.dashed")
-                    .font(Typo.icon(12)).foregroundStyle(theme.inkFaint)
-                    .frame(width: 48)
-                Text(conv.displayName).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink).lineLimit(1)
-                Spacer()
-                if model.isUnread(conv) { UnreadDot() }
-                Text(ChatTime.short(conv.lastAt)).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+        // 10-11：原来是长按菜单，但会被上面联系人那行的菜单抢走（同一个列表行里两个 contextMenu），
+        // Aporia找不到删窗口、去 TA 设定里误删了整个 TA → 改成行尾「⋯」
+        HStack(spacing: 0) {
+            Button { model.openChat(c, conversation: conv.id) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: conv.altName.isEmpty ? "bubble.left" : "person.crop.circle.dashed")
+                        .font(Typo.icon(12)).foregroundStyle(theme.inkFaint)
+                        .frame(width: 48)
+                    Text(conv.displayName).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink).lineLimit(1)
+                    Spacer()
+                    if model.isUnread(conv) { UnreadDot() }
+                    Text(ChatTime.short(conv.lastAt)).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                }
+                .padding(.leading, 16)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button { renameDraft = conv.title; renaming = (c, conv) } label: { Label("改名", systemImage: "pencil") }
-            Button(role: .destructive) { deletingWindow = (c, conv) } label: { Label("删掉", systemImage: "trash") }
+            .buttonStyle(.plain)
+            Menu {
+                Button { renameDraft = conv.title; renaming = (c, conv) } label: { Label("改名", systemImage: "pencil") }
+                Button(role: .destructive) { deletingWindow = (c, conv) } label: { Label("删掉这个窗口", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(Typo.icon(14, .semibold))
+                    .foregroundStyle(theme.inkFaint)
+                    .frame(width: 44, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -445,14 +468,14 @@ struct AddCompanionView: View {
             .opacity(name.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
             // 导入酒馆角色卡（10-01）：PNG 卡或 JSON 卡；10-11 起也认 txt 人设（文件名当名字）
             Button { importing = true } label: {
-                Label("导入角色卡 / txt 人设", systemImage: "square.and.arrow.down")
+                Label("导入角色卡 / txt、md 人设", systemImage: "square.and.arrow.down")
                     .font(Typo.sans(Typo.Size.callout, .semibold)).foregroundStyle(theme.accentDeep)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.plain)
         }
         .padding(24)
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .json, .plainText]) { result in
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .json, .plainText, UTType(filenameExtension: "md") ?? .plainText]) { result in
             guard case .success(let url) = result else { return }
             let ok = url.startAccessingSecurityScopedResource()
             defer { if ok { url.stopAccessingSecurityScopedResource() } }

@@ -259,6 +259,9 @@ final class LocalBrain: @unchecked Sendable {
             // TA 发的语音（10-04）：正文是转写，前面垫一行〔语音 12 秒：说得偏慢〕
             let notes = ($0["attachments"] as? [String] ?? []).compactMap { voiceNotes[$0] }.filter { !$0.isEmpty }
             if !notes.isEmpty { text = notes.joined(separator: "\n") + "\n" + text }
+            if isAssistant, let v = $0["inner_voice"] as? String, !v.isEmpty {
+                text += "\n\n" + InnerVoice.contextLine(v, zh: zh)        // 心声（10-11）：记得当时心里想什么，分得清没说出口
+            }
             if isAssistant {
                 let deeds = ($0["cards"] as? [[String: Any]] ?? []).filter { ($0["kind"] as? String) != "peek" }   // 查手机申请自己有一套
                     .compactMap { $0["text"] as? String }.filter { !$0.isEmpty }
@@ -317,6 +320,19 @@ final class LocalBrain: @unchecked Sendable {
             .map { $0["text"] as? String ?? "" }.joined(separator: "\n")
         let remembered = await host.mcp.memoryContext(host, companion: comp, conversation: conv, userText: lastUser, incognito: incognito)
         if !remembered.isEmpty { req.context += "\n\n" + remembered }
+        // 钉住的记忆进壹层（10-11，照 Host render_base 的 core）：接的是本地记忆库才有；无痕不带
+        if !incognito, host.mcp.memoryServer(host.store, companion: comp)?.id == LocalMemory.serverID {
+            let pinned = LocalMemory.vault(LocalMemory.scope(of: comp)).pinnedLines()
+            if !pinned.isEmpty {
+                req.system += "\n\n" + (zh ? "## 一直记着的" : "## Always remember") + "\n" + pinned.map { "- " + $0 }.joined(separator: "\n")
+            }
+        }
+        #if DEBUG
+        // 自测（10-11）：SIMCTL_CHILD_LITE_TEST_DUMP=1 把这一轮的 system 写到 lite-host/debug-system.txt
+        if ProcessInfo.processInfo.environment["LITE_TEST_DUMP"] != nil {
+            try? req.system.write(to: host.store.fileURL("debug-system.txt"), atomically: true, encoding: .utf8)
+        }
+        #endif
         // 工具：它可以先动手（记账、记待办、记饮食……）再说话；一轮最多来回 4 次，接了 MCP 6 次
         // 人物卡 / 远事归记忆库时，手机那份工具收起来，免得两边都写
         let box = await host.mcp.toolbox(host, companion: comp, incognito: incognito)
@@ -351,6 +367,10 @@ final class LocalBrain: @unchecked Sendable {
                                                    userName: identity.userName, character: custom ? contact.name : "")
             req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun)
         }
+        let innerOn = settings["inner_voice"] as? Bool ?? false     // 回复后的心声（10-11）：规矩常驻 system，钩子压最后
+        if innerOn {
+            req.system += "\n\n" + InnerVoice.rules(zh: zh, pronoun: pronoun, style: settings["inner_voice_style"] as? String ?? "")
+        }
         // 搬家笔记（10-05，没接记忆库时从 ChatGPT / Claude 搬来的那段）：不变的，放账本前面
         let moved = LocalImport.notesBlock(comp, zh: zh)
         if !moved.isEmpty { req.system += "\n\n" + moved }
@@ -373,7 +393,8 @@ final class LocalBrain: @unchecked Sendable {
         let sentinelLines = Self.sentinels(settings, zh: zh, monologue: monologue, pronoun: pronoun, userName: identity.userName,
                                            character: custom ? contact.name : "", provider: provider, memory: box.memory,
                                            messages: host.store.messages(conv))
-        for line in sentinelLines { req.context += "\n\n" + line }      // 思考风格压在最后、离它开口最近（照服务器 tail）
+        for line in sentinelLines { req.context += "\n\n" + line }
+        if innerOn { req.context += "\n\n" + InnerVoice.hook(zh: zh, pronoun: pronoun) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
         var text = "", thinking = ""
         var cards: [[String: Any]] = []
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
@@ -421,6 +442,8 @@ final class LocalBrain: @unchecked Sendable {
             if !mono.isEmpty { thinking += (thinking.isEmpty ? "" : "\n\n") + mono }
             text = body
         }
+        var innerVoiceText = ""                         // 心声（10-11）：最后那段切下来，不进气泡、不念
+        if innerOn { (text, innerVoiceText) = InnerVoice.split(text) }
         let parsed = Markers.parse(text)
         let thinkingMs = Int((Date().timeIntervalSince(started) * 1000).rounded())
         if !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -475,8 +498,12 @@ final class LocalBrain: @unchecked Sendable {
         if let want = parsed.wantsPeek, peek == nil {       // 申请卡跟在它说的话后面
             emit(conv, ["type": "card", "kind": "peek", "text": want, "private": false, "data": ["state": "ask"]])
         }
+        if !innerVoiceText.isEmpty, !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            emit(conv, ["type": "inner_voice", "text": innerVoiceText])
+        }
         if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !cards.isEmpty {
-            let saved = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards)
+            let saved = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
+                                             innerVoice: innerVoiceText)
             if !clips.isEmpty, let mid = saved["id"] as? Int, let (c, idx) = host.store.locate(message: mid) {
                 var list = host.store.messages(c)
                 list[idx]["voice_clips"] = clips
@@ -615,14 +642,25 @@ final class LocalBrain: @unchecked Sendable {
         func enabled(_ k: String) -> Bool { on[k] as? Bool ?? true }
         var out: [String] = []
         let thinkingOn = settings["thinking"] as? Bool ?? true
+        // 思考风格全文隔 thinking_style_every 轮贴一次（10-11 Aporia：滑块 1…12，默认 3；两种模式都按它，照服务器 inject.reminder_lines）
+        let turnNow = messages.filter { ($0["role"] as? String) == "user" }.count
+        let styleEvery = max(1, min(12, settings["thinking_style_every"] as? Int ?? 3))
+        let due = turnNow > 0 && turnNow % styleEvery == 0
         if thinkingOn && !monologue {
             let own = (settings["thinking_style_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let deepseek = provider.baseURL?.contains("deepseek") == true
-            if enabled("thinking_style") {
+            if enabled("thinking_style") && (due || turnNow <= 1) {        // 原生第一轮一定贴
                 out.append(own.isEmpty ? (zh ? "〔想事的时候〕" : "〔How I think〕") + "\n"
                            + Monologue.factoryStyle(zh: zh, pronoun: pronoun, userName: userName, character: character, noDraft: deepseek) : own)
             }
             if zh && !(enabled("thinking_style") && own.isEmpty) { out.append("〔用中文想〕心里想事也用中文，跟说出口的话用同一种语言。") }
+        }
+        // 手写独白时风格常驻 system，聊久了小模型照不住 → 到点在尾巴再贴一次
+        if thinkingOn && monologue && enabled("thinking_style") && due {
+            let own = (settings["thinking_style_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            out.append(own.isEmpty ? (zh ? "〔想事的时候〕" : "〔How I think〕") + "\n"
+                       + Monologue.factoryStyle(zh: zh, pronoun: pronoun, userName: userName, character: character,
+                                                noDraft: provider.baseURL?.contains("deepseek") == true) : own)
         }
         guard let memory else { return out }
         let remember = MCPToolNames.exposed(memory.slug, "remember"), search = MCPToolNames.exposed(memory.slug, "search")

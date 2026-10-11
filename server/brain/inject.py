@@ -146,12 +146,18 @@ def reminder_lines(settings: Settings, facts: TurnFacts, rng: random.Random, *, 
     t = TEXTS[settings.lang]
     on = settings.sentinels
     out: list[str] = []
+    # 思考风格全文隔 thinking_style_every 轮贴一次（10-11 Aporia：滑块 1…12，默认 3，两种模式都按它；照之前自用的 App的做法）
+    due = facts.turn_no % max(1, settings.thinking_style_every) == 0
     if mode == "monologue":
         from .monologue import hook
         out.append(hook(settings))
+        # 手写独白时风格常驻在壹层，聊久了小模型照不住 → 到点在尾巴再贴一次（自己写的优先）
+        if on.get("thinking_style") and due:
+            out.append(settings.thinking_style_text.strip()
+                       or f"{t['thinking_style']}\n{thinking_style(settings, no_draft, english=english, character=character)}")
     elif mode == "native":
         factory_style = on.get("thinking_style") and not settings.thinking_style_text.strip()
-        if on.get("thinking_style"):
+        if on.get("thinking_style") and (due or facts.turn_no <= 1):     # 原生思考第一轮一定贴（照之前自用的 App「从没贴过」）；独白的风格本来就常驻壹层
             out.append(settings.thinking_style_text.strip()
                        or f"{t['thinking_style']}\n{thinking_style(settings, no_draft, english=english, character=character)}")
         if settings.thinking and not factory_style and "think_lang" in t:

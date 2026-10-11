@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import PhotosUI
 import SwiftUI
 
@@ -261,7 +262,7 @@ struct CompanionSettingsView: View {
     @State private var writingOwn = false       // 出厂性格清空了、正在自己写
     @State private var wechatDraft = ""         // 微信号先在本地编辑，合法才存（10-11）
     @State private var wechatNote: String?
-    @State private var readingTxt = false       // 性格从 txt 读进来（10-11 内测反馈）
+    @State private var readingTxt = false       // 性格从 txt / md 读进来（10-11 内测反馈）
     @State private var txtNote: String?
     let companion: CompanionDTO
 
@@ -408,7 +409,7 @@ struct CompanionSettingsView: View {
                     row("性格", "TA 出厂就有自己的性格。想照你的想法来，就清空重写")
                     HStack(spacing: 18) {
                         Button("清空，自己写") { writingOwn = true }
-                        Button("从 txt 读进来") { readingTxt = true }
+                        Button("从 txt / md 读进来") { readingTxt = true }
                     }
                     .font(Typo.sans(Typo.Size.callout, .semibold))
                     .foregroundStyle(theme.accentDeep)
@@ -427,7 +428,7 @@ struct CompanionSettingsView: View {
                             store.persona["factory"] = Array(Set((store.persona["factory"] as? [String] ?? []) + ["personality"]))
                             writingOwn = false
                         }
-                        Button("从 txt 读进来") { readingTxt = true }
+                        Button("从 txt / md 读进来") { readingTxt = true }
                     }
                     .font(Typo.sans(Typo.Size.callout))
                     .foregroundStyle(theme.accentDeep)
@@ -436,13 +437,13 @@ struct CompanionSettingsView: View {
             }
             // 读进来是整段换掉（不是接在后面）；读不了给一句人话
             Color.clear.frame(height: 0)
-                .fileImporter(isPresented: $readingTxt, allowedContentTypes: [.plainText]) { result in
+                .fileImporter(isPresented: $readingTxt, allowedContentTypes: [.plainText, UTType(filenameExtension: "md") ?? .plainText]) { result in
                     guard case .success(let url) = result else { return }
                     let ok = url.startAccessingSecurityScopedResource()
                     defer { if ok { url.stopAccessingSecurityScopedResource() } }
                     guard let data = try? Data(contentsOf: url), let text = Self.decodeText(data)?
                         .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-                        txtNote = String(localized: "这个 txt 读不出来"); return
+                        txtNote = String(localized: "这个文件读不出来"); return
                     }
                     guard text.count <= 30_000 else { txtNote = String(localized: "太长了（最多 3 万字）"); return }
                     txtNote = nil
@@ -654,7 +655,7 @@ struct CompanionSettingsView: View {
                     ImportChatsView(companion: companion).environmentObject(theme)
                 } label: {
                     HStack {
-                        row("从别的 AI 搬过来", "ChatGPT、Claude、DeepSeek、Gemini 导出的聊天记录，再挑出值得记住的事")
+                        row("从别的 AI 搬过来", "ChatGPT、Claude、DeepSeek、Gemini、Kelivo 导出的聊天记录或 md 文件，再挑出值得记住的事")
                         Spacer()
                         Image(systemName: "chevron.right").font(Typo.icon(13)).foregroundStyle(theme.inkFaint)
                     }

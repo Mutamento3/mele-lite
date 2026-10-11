@@ -213,4 +213,50 @@ import Testing
         #expect(ChatImport.kelivoMemories(try fixture("kelivo-backup.zip")) == ["小满喜欢海", "小满怕冷"])
         #expect(ChatImport.kelivoMemories(try fixture("claude-export.zip")).isEmpty)
     }
+
+    @Test func markdownChatExport() throws {
+        let md = """
+        # Chat with 阿橘
+
+        *Exported on 2026年10月11日, 6:54 PM*
+        *3 messages in this export*
+
+        ---
+        ## 2026年10月11日星期日
+
+        ### 6:49 PM — 小满
+
+        晚上好！吃了没？
+
+        ### 6:49 PM — 阿橘 *(proactive)*
+
+        *把爪子从画上收回来*
+
+        吃了。
+
+        ### Day plan - morning
+
+        这一行是正文里的小标题，不是一条消息。
+
+        ---
+        ## Monday, October 12, 2026
+
+        ### 9:05 AM — 小满
+
+        早
+        """
+        let tz = TimeZone(identifier: "Asia/Singapore")!
+        let got = try ChatImport.parse(Data(md.utf8), timeZone: tz)
+        #expect(got.source == .markdown && got.conversations.count == 1)
+        let c = got.conversations[0]
+        #expect(c.assistant == "阿橘" && c.title == "Chat with 阿橘")
+        #expect(c.messages.map(\.role) == [.user, .assistant, .user])
+        #expect(c.messages[0].text == "晚上好！吃了没？")
+        #expect(c.messages[1].text == "*把爪子从画上收回来*\n\n吃了。\n\n### Day plan - morning\n\n这一行是正文里的小标题，不是一条消息。")
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
+        #expect(cal.dateComponents([.month, .day, .hour, .minute], from: c.messages[0].at) == DateComponents(month: 10, day: 11, hour: 18, minute: 49))
+        #expect(c.messages[1].at > c.messages[0].at)                     // 同一分钟也分得出先后
+        #expect(cal.dateComponents([.day, .hour, .minute], from: c.messages[2].at) == DateComponents(day: 12, hour: 9, minute: 5))
+        #expect(throws: ChatImportError.self) { try ChatImport.parse(Data("# 随便写的笔记\n\n没有消息头".utf8)) }
+    }
 }

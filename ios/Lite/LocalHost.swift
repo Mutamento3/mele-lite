@@ -209,7 +209,7 @@ final class LocalHost: @unchecked Sendable {
         "humor": "mid", "recall_level": "medium", "careful_read": true, "recall_probe": true, "memory_length": NSNull(),
         "reply_wait": 10, "max_bubbles": 6, "long_mode": false, "thinking": true, "thinking_mode": NSNull(),
         "ledger_same_as_chat": false, "sentinels": ["thinking_style": true, "tool_reminder": true, "remembered": true],
-        "tool_reminder_every": 5, "thinking_style_text": "", "injections": [Any](), "patrol_level": "mid",
+        "tool_reminder_every": 5, "thinking_style_text": "", "thinking_style_every": 3, "inner_voice": false, "inner_voice_style": "", "injections": [Any](), "patrol_level": "mid",
         "heartbeat_on": true, "morning_on": true, "sleep_from": "00:00", "sleep_to": "08:00", "patrol_overrides": [String: Any](),
         "relationship": "", "cache_keepalive": false, "diary_on": true, "offline_life": false, "talk_rules": "", "diary_chars": 600, "voice_mode": "sometimes",
         "full_handbook": true,      // Lite 说明书开关（10-08 Aporia：默认开）
@@ -301,7 +301,7 @@ final class LocalHost: @unchecked Sendable {
     private func syncAdvanced(_ id: String) -> LocalResponse {
         guard let src = store.companion(id)?["settings"] as? [String: Any] else { return .error(404, "") }
         let adv = ["careful_read", "heartbeat_on", "injections", "ledger_same_as_chat", "max_bubbles", "patrol_overrides",
-                   "recall_probe", "reply_wait", "sentinels", "thinking", "thinking_mode", "thinking_style_text", "tool_reminder_every", "full_handbook"]
+                   "recall_probe", "reply_wait", "sentinels", "thinking", "thinking_mode", "thinking_style_text", "tool_reminder_every", "full_handbook", "thinking_style_every", "inner_voice", "inner_voice_style"]
         var n = 0
         for var c in store.companions where (c["id"] as? String) != id {
             var s = c["settings"] as? [String: Any] ?? [:]
@@ -451,7 +451,7 @@ final class LocalHost: @unchecked Sendable {
         }
         let shown = bubbles.map { LocalVoice.isVoice($0) ? LocalVoice.asText($0) : $0 }
         return ["id": m["id"] ?? 0, "role": role, "text": text, "thinking": m["thinking"] ?? "",
-                "thinking_ms": m["thinking_ms"] ?? NSNull(), "at": m["at"] ?? "", "bubbles": shown, "voices": voices, "cards": m["cards"] ?? [Any](),
+                "thinking_ms": m["thinking_ms"] ?? NSNull(), "inner_voice": m["inner_voice"] ?? "", "at": m["at"] ?? "", "bubbles": shown, "voices": voices, "cards": m["cards"] ?? [Any](),
                 "reaction": m["reaction"] ?? NSNull(), "reactions": Self.perBubble(m, count: shown.count),
                 "attachments": atts, "divider": m["divider"] ?? NSNull()]
     }

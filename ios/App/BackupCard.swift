@@ -16,6 +16,8 @@ struct BackupCard: View {
     @State private var pending: URL?
     @State private var pendingSummary: LocalBackup.Summary?
     @State private var restored: LocalBackup.Summary?
+    @State private var autos: [LocalBackup.AutoBackup] = []
+    @State private var fromAuto = false     // 自动备份是同一台手机留的，钥匙还在钥匙串里
 
     private static let fileType = UTType(filenameExtension: LocalBackup.ext) ?? .data
 
@@ -61,13 +63,37 @@ struct BackupCard: View {
             if let failure {
                 Text(failure).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red.opacity(0.8))
             }
+
+            // 删 TA 前自动留的（10-11）
+            if !autos.isEmpty {
+                Divider().padding(.vertical, 2)
+                Text("删 TA 前自动留的").font(Typo.sans(Typo.Size.body, .semibold)).foregroundStyle(theme.ink)
+                Hint(text: String(localized: "每次删 TA 之前，Mele 会自己先整个备份一份，只留最近 3 份。恢复会把 Mele 退回到删之前那一刻，那之后的新聊天也会一起退回去。"))
+                ForEach(autos) { a in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("删「\(a.who)」之前").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                            Text("\(a.date.formatted(date: .abbreviated, time: .shortened)) · \(ByteCountFormatter.string(fromByteCount: a.bytes, countStyle: .file))")
+                                .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                        }
+                        Spacer()
+                        Button { fromAuto = true; Task { await prepareRestore(a.url) } } label: {
+                            Text("恢复").font(Typo.sans(Typo.Size.caption, .semibold)).foregroundStyle(theme.accentDeep)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(working)
+                    }
+                }
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
+        .onAppear { autos = LocalBackup.autoBackups() }
         .sheet(item: $share) { f in ActivityView(items: [f.url]) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [Self.fileType, .data]) { result in
             guard case .success(let url) = result else { return }
+            fromAuto = false
             Task { await prepareRestore(url) }
         }
         // 弹窗一关 isPresented 就置 false——那时候别删文件，恢复按钮自己带着地址走
@@ -84,7 +110,7 @@ struct BackupCard: View {
             Button(String(localized: "好")) { restored = nil }
         } message: {
             Text(String(localized: "从后台把 Mele 划掉，再打开，就是备份里的样子了。")
-                 + ((restored?.keys ?? 0) == 0 ? String(localized: "\n备份里没有钥匙，打开后在「钥匙串」重新加一下。") : ""))
+                 + ((restored?.keys ?? 0) == 0 && !fromAuto ? String(localized: "\n备份里没有钥匙，打开后在「钥匙串」重新加一下。") : ""))
         }
     }
 

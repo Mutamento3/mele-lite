@@ -536,6 +536,15 @@ final class LocalMemory: @unchecked Sendable {
         set { store.write("\(folder)/sticky.json", String(newValue.prefix(300))) }
     }
 
+    /// 钉住的记忆，每轮放进 system 最前面那层（10-11 Aporia：照 Host 的壹层「一直记着的」）。
+    /// 按钉的先后排（旧的在前），新钉一条只动尾巴，缓存接得上；最多 30 条。
+    func pinnedLines(limit: Int = 30) -> [String] {
+        lock.withLock {
+            items.filter { $0.kind == "core" }.sorted { $0.id < $1.id }.prefix(limit)
+                .map { $0.title.isEmpty ? $0.content : "\($0.title)：\($0.content)" }
+        }
+    }
+
     func wake() -> MCPCallResult {
         lock.withLock {
             let now = Date()

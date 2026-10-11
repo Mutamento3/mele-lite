@@ -25,7 +25,8 @@ from .settings import Settings
 
 log = logging.getLogger(__name__)
 
-SOURCES = {"chatgpt": "ChatGPT", "claude": "Claude", "deepseek": "DeepSeek", "gemini": "Gemini", "kelivo": "Kelivo"}
+SOURCES = {"chatgpt": "ChatGPT", "claude": "Claude", "deepseek": "DeepSeek", "gemini": "Gemini", "kelivo": "Kelivo",
+           "markdown": "Markdown"}      # md 聊天记录（10-11）：手机上认好再发来
 KEEP_LIVE = 40
 CHUNK = 6000
 MAX_MESSAGES = 50_000

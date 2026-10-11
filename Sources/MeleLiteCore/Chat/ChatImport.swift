@@ -4,10 +4,10 @@ import Foundation
 /// 读官方「导出数据」给的包（.zip，或者解压后的 conversations.json），认出是哪家，拆成一段段对话。
 /// 只留文字：系统消息、工具、思考、图片 / 文件（导出里只有文件名）都不要；没有字的对话不要。
 public enum ChatSource: String, Sendable, CaseIterable {
-    case chatgpt, claude, deepseek, gemini, kelivo
+    case chatgpt, claude, deepseek, gemini, kelivo, markdown
     public var appName: String {
         switch self {
-        case .chatgpt: "ChatGPT"; case .claude: "Claude"; case .deepseek: "DeepSeek"; case .gemini: "Gemini"; case .kelivo: "Kelivo"
+        case .chatgpt: "ChatGPT"; case .claude: "Claude"; case .deepseek: "DeepSeek"; case .gemini: "Gemini"; case .kelivo: "Kelivo"; case .markdown: "Markdown"
         }
     }
 }
@@ -56,6 +56,7 @@ public enum ChatImport {
 
     public static func parse(_ data: Data, timeZone: TimeZone = .current) throws -> (source: ChatSource, conversations: [ImportedConversation]) {
         if let db = kelivoDatabase(in: data) { return (.kelivo, try kelivo(sqlite: db)) }
+        if let md = markdownChat(data, timeZone: timeZone) { return (.markdown, [md]) }      // md 聊天记录（10-11）
         if let takeout = try gemini(zip: data, timeZone: timeZone) { return (.gemini, takeout) }
         // 包里的文件叫 conversations.json，或者带编号 conversations-000.json
         let json = (try? MiniZip.entry(in: data) { $0.hasPrefix("conversations") && $0.hasSuffix(".json") }).flatMap { $0 } ?? data

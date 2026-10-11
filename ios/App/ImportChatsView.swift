@@ -32,13 +32,13 @@ struct ImportChatsView: View {
 
     private var cid: String { companion.id.uuidString.lowercased() }
     private var app: String {
-        ["chatgpt": "ChatGPT", "claude": "Claude", "deepseek": "DeepSeek", "gemini": "Gemini", "kelivo": "Kelivo"][source] ?? "Claude"
+        ["chatgpt": "ChatGPT", "claude": "Claude", "deepseek": "DeepSeek", "gemini": "Gemini", "kelivo": "Kelivo", "markdown": "Markdown"][source] ?? "Claude"
     }
 
     var body: some View {
         TilePage {
             Tile {
-                Text("把你在 ChatGPT、Claude、DeepSeek、Gemini 或 Kelivo 里的聊天搬给\(companion.name)：旧聊天放进一个新窗口，能翻能搜；再从里面挑出值得记住的事，让 TA 记得你。")
+                Text("把你在 ChatGPT、Claude、DeepSeek、Gemini、Kelivo 里的聊天，或者导出成 md 的聊天记录，搬给\(companion.name)：旧聊天放进一个新窗口，能翻能搜；再从里面挑出值得记住的事，让 TA 记得你。")
                     .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.ink)
                 ExpandRow(open: $howOpen) {
                     Text("怎么拿到导出包").font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.ink)
@@ -49,6 +49,7 @@ struct ImportChatsView: View {
                         Text("DeepSeek：头像 → 设置 → 数据管理 → 导出所有历史对话。下载一个 .zip（7 天内有效），直接选它。")
                         Text("Gemini：打开 takeout.google.com → 先「取消全选」→ 只勾「我的活动」→ 点「包括所有活动数据」只留「Gemini Apps」→ 点「多种格式」把「活动记录」改成 JSON（默认是 HTML，选错了这里认不出）。Gemini 只记一问一答，不分对话，搬过来按天排成一段段。")
                         Text("Kelivo：设置 → 数据备份 → 导入和导出 → 导出为文件，选导出的 .zip。备份页「备份与导入内容」里可以只勾聊天记录、助手、记忆：「供应商」存着你填的 API key，这里用不到，不勾更放心；「文件」（图片附件）不勾包会小很多。包里所有对话下一步都会列出来，只勾想搬的就行。")
+                        Text("md 聊天记录：每条消息前面一行「### 时间 — 名字」的那种（比如「### 6:49 PM — 阿橘」），日期单独一行「## 2026年10月11日」。第一行写着「# Chat with 名字」的话，那个名字就是 TA。一个文件是一段对话，可以一次选好几个。")
                         Text("包可以直接选，也可以在「文件」里解压后选里面的 conversations.json。包只在你手机上读，不会上传到我们这里；连着 Mele Host 的话，选中的对话会发到你自己的 Host 上。")
                     }
                     .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
@@ -63,7 +64,7 @@ struct ImportChatsView: View {
         }
         .navigationTitle(String(localized: "从别的 AI 搬过来"))
         .navigationBarTitleDisplayMode(.inline)
-        .fileImporter(isPresented: $picking, allowedContentTypes: [.zip, .json], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.zip, .json, UTType(filenameExtension: "md") ?? .plainText, .plainText], allowsMultipleSelection: true) { result in
             guard case let .success(urls) = result else { return }
             Task { await preview(urls) }
         }

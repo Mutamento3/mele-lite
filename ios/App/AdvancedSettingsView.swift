@@ -10,6 +10,8 @@ struct AdvancedSettingsView: View {
     @State private var confirmSync = false
     @State private var synced: Int?
     @State private var confirmDelete = false
+    @State private var deleteFailed: String?
+    @State private var deleting = false
 
     /// 出厂的说话规矩（跟 MeleLiteCore Prompts/zh/modes.md 的 [talk]、服务器说明书「格式」那两条同一个意思）
     static var factoryTalk: String {
@@ -89,6 +91,17 @@ struct AdvancedSettingsView: View {
                     TextEditor(text: store.s("thinking_style_text", ""))
                         .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 90).scrollContentBackground(.hidden)
                 }
+                // 回复后的心声（10-11 内测反馈）：说完以后在最后写几行心里话，聊天里是一张小卡片
+                Toggle(isOn: store.s("inner_voice", false)) {
+                    row("回复后的心声", "TA 说完话以后，在最后写几行心里话（嘴上没说的那部分），显示成一张小卡片")
+                }
+                if store.settings["inner_voice"] as? Bool ?? false {
+                    VStack(alignment: .leading, spacing: 6) {
+                        row("心声风格", "空着用出厂的；写了就换成你的")
+                        TextEditor(text: store.s("inner_voice_style", ""))
+                            .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 70).scrollContentBackground(.hidden)
+                    }
+                }
                 }
             } header: { GlassHeader(String(localized: "思考")) }
 
@@ -131,10 +144,24 @@ struct AdvancedSettingsView: View {
                          ("tool_reminder", "提醒用工具", "隔几轮提醒 TA 该记的记下来"),
                          ("remembered", "〔记住了〕", "TA 记下东西后告诉 TA 一声")], id: \.0) { key, title, sub in
                     Toggle(isOn: sentinel(key)) { row(title, sub) }
+                    if key == "thinking_style" {
+                        // 10-11 Aporia：思考风格隔几轮提醒一次（1…12，默认 3；两种想法都按它，照之前自用的 App）
+                        let n = store.settings["thinking_style_every"] as? Int ?? 3
+                        VStack(alignment: .leading, spacing: 4) {
+                            row(n == 1 ? String(localized: "每轮都提醒") : String(localized: "每 \(n) 轮提醒一次"),
+                                "在最后贴一次思考风格的全文，离 TA 开口最近")
+                            Slider(value: Binding(get: { Double(n) },
+                                                  set: { store.setNow(settings: ["thinking_style_every": Int($0.rounded())]) }),
+                                   in: 1...12, step: 1)
+                                .tint(theme.accentDeep)
+                        }
+                        .disabled(!sentinel("thinking_style").wrappedValue)
+                        .opacity(sentinel("thinking_style").wrappedValue ? 1 : 0.4)
+                    }
                 }
             } header: { GlassHeader(String(localized: "哨兵")) } footer: {
                 // 10-08 Aporia：Lite 也要哨兵。后两个说的是记忆库的工具，没接记忆库时不贴
-                if Lite.local { Text("提醒思考风格在 TA 用模型自己的思考时生效（手写独白已经带着了）。提醒用工具、〔记住了〕要接上记忆库才会贴。") }
+                if Lite.local { Text("提醒思考风格：按上面的轮数在最后贴一次全文（手写独白时风格本来就在设定里，这是怕聊久了忘了）。提醒用工具、〔记住了〕要接上记忆库才会贴。") }
             }
 
             Tile {
@@ -193,8 +220,9 @@ struct AdvancedSettingsView: View {
             if model.companions.count > 1 {
                 Tile {
                     Button(role: .destructive) { confirmDelete = true } label: {
-                        Text("删除这个联系人").font(Typo.sans(Typo.Size.body)).frame(maxWidth: .infinity)
+                        Text(deleting ? String(localized: "正在先留一份备份……") : String(localized: "删除 TA（所有窗口一起删）")).font(Typo.sans(Typo.Size.body)).frame(maxWidth: .infinity)
                     }
+                    .disabled(deleting)
                 }
             }
           }
@@ -208,12 +236,18 @@ struct AdvancedSettingsView: View {
         .confirmationDialog("删除 \(companion.name)？", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
                 Task {
-                    await model.deleteCompanion(companion)
+                    deleting = true
+                    let why = await model.deleteCompanion(companion)
+                    deleting = false
+                    if let why { deleteFailed = why; return }
                     if model.chat?.companion.id == companion.id { model.chat = nil }
                     dismiss()
                 }
             }
-        } message: { Text("所有聊天、TA 记得的事、设定都会一起删掉，找不回来。") }
+        } message: { Text("TA 所有窗口的聊天、TA 记得的事、设定都会一起删掉。" + MessageListView.deleteSafetyNote + "\n只想删一个窗口的话：回消息列表，点 TA 那行右边的窗口数，再点那个窗口右边的「⋯」。") }
+        .alert(String(localized: "没删成"), isPresented: Binding(get: { deleteFailed != nil }, set: { if !$0 { deleteFailed = nil } })) {
+            Button(String(localized: "好")) { deleteFailed = nil }
+        } message: { Text(deleteFailed ?? "") }
     }
 
     // MARK: 小工具

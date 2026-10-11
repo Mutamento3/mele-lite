@@ -31,7 +31,7 @@ from . import archive, attachments as files, books, context_line, diary, drawer,
 from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
 from .context import ContextParts, build_request, render_volatile, user_tag
-from . import monologue
+from . import inner_voice, monologue
 from .inject import TEXTS, TurnFacts, reminder_lines, split_thinking, thinking_style
 from .scope import Scope
 from .persona import Persona, render_base, tone_lines
@@ -193,7 +193,10 @@ def history_msgs(stored: list[archive.StoredMsg], lang: str) -> tuple[list[Msg],
             out.append(Msg("user", with_tools_note(pending, m.text)))
             pending = ""
         else:
-            out.append(Msg("assistant", m.text))
+            text = m.text
+            if m.inner_voice:                 # 心声（10-11）：它记得当时心里想什么，但分得清那不是说出口的
+                text = f"{text}\n\n{inner_voice.context_line(m.inner_voice, lang)}"
+            out.append(Msg("assistant", text))
             pending = TOOLS_HEAD[lang].format(sep.join(m.tools.splitlines())) if m.tools.strip() else ""
     return out, pending
 
@@ -412,7 +415,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         outside = await _safe(mcp.toolbox(pool, getattr(deps.keys, "box", None), acc, settings.mcp_servers), mcp.Toolbox())
     parts = ContextParts(
         tools=tool_specs(incognito=scope.incognito) + outside.specs,
-        base=render_base(persona, core, lang, monologue=mono_rules,
+        base=render_base(persona, core, lang,
+                         monologue="\n\n".join(x for x in (mono_rules, inner_voice.rules(settings) if settings.inner_voice else "") if x),
                          tone=tone_lines(lang, settings.warmth, settings.initiative, settings.humor)
                          + ([] if scope.incognito else voice.mode_lines(lang, settings.voice_mode)),
                          relationship=settings.relationship, lore=lore.always_block(lore_all, lang),
@@ -425,7 +429,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         volatile=render_volatile(now=now, tz=settings.tz, lang=lang, recall=recall, sticky=sticky, lines=before),
         user_text=with_tools_note(tools_note, wake or text_for_model),
         # 人设锚（10-01 Aporia：怕脱离人设）：离最新对话最近的一行，每轮十几个字
-        tail="\n".join([*thinking_lines, TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
+        tail="\n".join([*thinking_lines, *([inner_voice.hook(settings)] if settings.inner_voice else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
                          + ("" if settings.long_mode or settings.talk_rules.strip() else TEXTS[lang]["short"])]),
         images=images,
     )
@@ -464,6 +468,10 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             await emit(ev)
         await archive.add_message(pool, conv, "wake", wake, now=now)
 
+    # 心声（10-11）：最后那段 [心声]…[/心声] 切下来，不进气泡、不念，存在这条上、单独推给 App 画小卡片
+    voice_text = ""
+    if settings.inner_voice:
+        out.text, voice_text = inner_voice.split(out.text)
     if out.thinking.strip():
         await emit({"type": "thinking", "text": out.thinking, "ms": thinking_ms})
     bubbles_out = split_reply(out.text, settings.max_bubbles, settings.long_mode)
@@ -494,10 +502,12 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             await emit({"type": "bubble", "text": voice.strip_tags(voice.body(bubble)), "voice": clip.public()})
     if not out.text.strip() and out.thinking.strip():
         log.warning("reply came out empty after cutting the monologue; thinking was: %s", out.thinking[-2000:])
+    if voice_text and out.text.strip():
+        await emit({"type": "inner_voice", "text": voice_text})
     if out.text.strip():
         saved = await archive.add_message(pool, conv, "assistant", out.text, thinking=out.thinking,
                                           tools="\n".join(out.tool_notes), cards=out.cards, thinking_ms=thinking_ms,
-                                          now=deps.now())
+                                          inner_voice=voice_text, now=deps.now())
         await _safe(voice.attach(pool, acc, clip_ids, saved.id), None)
         if not wake and not scope.incognito:    # 「划线说两句」挂着线头：回话抄一份进页边（10-02 书架）
             await _safe(books.catch_reply(pool, acc, conv, comp, out.text, deps.now()), None)

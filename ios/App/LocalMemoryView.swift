@@ -176,6 +176,7 @@ struct LocalMemoryEditView: View {
     @State private var content = ""
     @State private var tags = ""
     @State private var importance = 5
+    @State private var pinned = false
 
     var body: some View {
         NavigationStack {
@@ -187,6 +188,12 @@ struct LocalMemoryEditView: View {
                 Section {
                     TextField(String(localized: "标签，用逗号隔开"), text: $tags)
                     Stepper(String(localized: "重要 \(importance)（10 = 永远不淡）"), value: $importance, in: 1...10)
+                }
+                // 10-11 Aporia：钉住原来只能在列表里右滑，没人找得到 → 改的地方也放一个
+                Section {
+                    Toggle(String(localized: "钉住"), isOn: $pinned).tint(theme.accentDeep)
+                } footer: {
+                    Text("钉住的记忆不会淡，TA 每次都会想起来。适合「永远要记得」的事，别钉太多。")
                 }
                 if let item {
                     Section {
@@ -210,6 +217,7 @@ struct LocalMemoryEditView: View {
                 guard let item else { return }
                 title = item.title; content = item.content
                 tags = item.tags.joined(separator: ", "); importance = item.importance
+                pinned = item.kind == "core"
             }
         }
     }
@@ -219,8 +227,14 @@ struct LocalMemoryEditView: View {
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         if let item {
             _ = lib.update(id: item.id, content: content, title: title, tags: list, importance: importance)
+            if pinned != (item.kind == "core") { _ = lib.pin(id: item.id, pinned: pinned) }
         } else {
-            _ = lib.remember(content: content, title: title, tags: list, importance: importance)
+            let r = lib.remember(content: content, title: title, tags: list, importance: importance)
+            if pinned, let json = r.structuredJSON?.data(using: .utf8),
+               let d = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+               let id = (d["memory"] as? [String: Any])?["id"] as? Int {
+                _ = lib.pin(id: id, pinned: true)
+            }
         }
         dismiss()
     }

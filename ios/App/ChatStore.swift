@@ -14,6 +14,7 @@ struct ChatItem: Identifiable, Hashable {
         case song(SongCardData)    // 歌卡（09-30）：画在消息流里，不收进头像下的动作卡
         case sticker(Int)          // 它发的表情包（10-01）：一张图片气泡，编号 = 表情包编号
         case deeds([Deed])         // 它这一轮做过的事（10-03 Aporia：不挂动作卡片了，折成「做了几件事」）
+        case innerVoice            // 回复后的心声（10-11）：这一轮最后一张小卡片
     }
 
     /// 做过的一件事：种类 + 服务器给的「动作：内容」那一句
@@ -106,7 +107,8 @@ struct ChatItem: Identifiable, Hashable {
             }
         }
         let peeks = (m.cards ?? []).filter { $0.kind.hasPrefix("peek") }
-        let room = slots - bubbleSlot - peeks.count
+        let voice = m.innerVoice?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let room = slots - bubbleSlot - peeks.count - (voice.isEmpty ? 0 : 1)
         if bubbles.count > room { bubbles = Array(bubbles.prefix(room - 1)) + [bubbles.dropFirst(room - 1).joined(separator: "\n\n")] }
         for (i, text) in bubbles.enumerated() {
             let v = (m.voices ?? []).indices.contains(i) ? m.voices?[i] : nil
@@ -118,6 +120,10 @@ struct ChatItem: Identifiable, Hashable {
         for (j, card) in peeks.enumerated() {
             out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + bubbles.count + j), messageID: m.id, mine: false,
                                 kind: .card(card.kind), text: card.text, at: m.at))
+        }
+        if !voice.isEmpty {         // 心声压在这一轮最后（说完了，心里才是这样）
+            out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + bubbles.count + peeks.count), messageID: m.id,
+                                mine: false, kind: .innerVoice, text: voice, at: m.at))
         }
         return out
     }
@@ -233,7 +239,7 @@ final class ChatStore: ObservableObject {
         let real = ChatItem.rows(of: m)
         func sameKind(_ a: ChatItem.Kind, _ b: ChatItem.Kind) -> Bool {
             switch (a, b) {
-            case (.text, .text), (.thinking, .thinking), (.card, .card), (.song, .song), (.sticker, .sticker): return true
+            case (.text, .text), (.thinking, .thinking), (.card, .card), (.song, .song), (.sticker, .sticker), (.innerVoice, .innerVoice): return true
             default: return false
             }
         }
@@ -633,6 +639,9 @@ final class ChatStore: ObservableObject {
             live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .text,
                                  text: ev.text ?? "", at: Date(), voice: ev.voice))
             typing = false               // 同一次刷新里：三个点直接换成正文
+            rebuild()
+        case "inner_voice":              // 心声（10-11）：这一轮说完了才到，排最后
+            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .innerVoice, text: ev.text ?? "", at: Date()))
             rebuild()
         case "notice":
             errorText = ev.text

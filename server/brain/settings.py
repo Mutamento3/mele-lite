@@ -29,7 +29,7 @@ PATROL_OVERRIDES = {                                # 高级设置里能单独�
 # 「高级」里的项：「同步到全部联系人」只抄这些（09-28 Aporia要的一键同步），不碰名字、性格、关系、钥匙这些外层的
 ADVANCED_KEYS = ("careful_read", "recall_probe", "reply_wait", "max_bubbles", "thinking", "thinking_mode",
                  "thinking_style_text", "ledger_same_as_chat", "sentinels", "injections", "patrol_overrides",
-                 "heartbeat_on", "tool_reminder_every")
+                 "heartbeat_on", "tool_reminder_every", "thinking_style_every", "inner_voice", "inner_voice_style")
 
 
 def parse_hm(s: str):
@@ -76,6 +76,9 @@ class Settings:
     sentinels: dict[str, bool] = field(default_factory=lambda: {k: k not in SENTINELS_OFF for k in SENTINELS})
     tool_reminder_every: int = 5
     thinking_style_text: str = ""          # 自己改写的思考风格；空 = 用出厂的
+    thinking_style_every: int = 3          # 思考风格隔几轮在尾巴贴一次全文（10-11 Aporia：滑块 1…12，默认 3；两种模式都按它）
+    inner_voice: bool = False              # 回复后的心声（10-11）：说完以后最后写 [心声]…[/心声]，App 画成小卡片
+    inner_voice_style: str = ""            # 自己写的心声写法；空 = 出厂
     injections: list[Injection] = field(default_factory=list)
     patrol_level: str = "mid"              # 「多久来找你」：low / mid / high / max
     heartbeat_on: bool = True              # 心跳（它自己醒来想想要不要找你），默认开
@@ -144,6 +147,8 @@ class Settings:
             raise ValueError("voice_mode must be off, sometimes or often")
         if self.tool_reminder_every < 1:
             raise ValueError("tool_reminder_every must be >= 1")
+        if not 1 <= self.thinking_style_every <= 12:
+            raise ValueError("thinking_style_every must be 1..12")
         try:
             ZoneInfo(self.tz)
         except Exception as e:

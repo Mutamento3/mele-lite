@@ -13,7 +13,7 @@ import asyncpg
 from llm.types import Usage
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
-_MSG_COLS = "id, role, text, thinking, created_at, tools, parts, cards, thinking_ms"
+_MSG_COLS = "id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice"
 _JSON_TABLES = ("user_settings", "user_state")
 USER_SIDE = ("user", "wake")      # 历史里算用户那一侧的：TA 说的话、叫醒它的〔醒来〕
 _ALL_TABLES = ("chat_messages", "ledger_days", "user_settings", "user_state", "personas", "turn_logs",
@@ -31,6 +31,7 @@ class StoredMsg:
     parts: list[str] | None = None   # TA 连发的几句原来怎么分的（只有拼过的才有）
     cards: list[dict] | None = None  # 这一轮挂出来的动作卡片 [{kind, text}]（只有它说的话才有）
     thinking_ms: int | None = None   # 这一轮想了多久（10-05）；早先的消息、没思考的是 None
+    inner_voice: str = ""            # 回复后的心声（10-11）
 
 
 def _now(now: datetime | None) -> datetime:
@@ -41,7 +42,7 @@ def _msg(r) -> StoredMsg:
     def js(v):
         return json.loads(v) if isinstance(v, str) else v
     return StoredMsg(r["id"], r["role"], r["text"], r["thinking"], r["created_at"], r["tools"],
-                     js(r["parts"]), js(r["cards"]), r["thinking_ms"])
+                     js(r["parts"]), js(r["cards"]), r["thinking_ms"], r["inner_voice"] or "")
 
 
 async def apply_brain_schema(dsn: str) -> None:
@@ -54,12 +55,12 @@ async def apply_brain_schema(dsn: str) -> None:
 
 async def add_message(pool, user_id: UUID, role: str, text: str, *, thinking: str = "", tools: str = "",
                       parts: list[str] | None = None, cards: list[dict] | None = None,
-                      thinking_ms: int | None = None, now: datetime | None = None) -> StoredMsg:
+                      thinking_ms: int | None = None, inner_voice: str = "", now: datetime | None = None) -> StoredMsg:
     r = await pool.fetchrow(
-        f"INSERT INTO chat_messages (user_id, role, text, thinking, created_at, tools, parts, cards, thinking_ms) "
-        f"VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9) RETURNING {_MSG_COLS}", user_id, role, text, thinking,
+        f"INSERT INTO chat_messages (user_id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice) "
+        f"VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10) RETURNING {_MSG_COLS}", user_id, role, text, thinking,
         _now(now), tools, json.dumps(parts, ensure_ascii=False) if parts and len(parts) > 1 else None,
-        json.dumps(cards, ensure_ascii=False) if cards else None, thinking_ms if thinking.strip() else None)
+        json.dumps(cards, ensure_ascii=False) if cards else None, thinking_ms if thinking.strip() else None, inner_voice)
     return _msg(r)
 
 
@@ -235,6 +236,7 @@ async def export(pool, user_id: UUID) -> dict:
     usage = await pool.fetch("SELECT * FROM usage_daily WHERE user_id = $1 ORDER BY day, model", user_id)
     return {
         "messages": [{"id": r["id"], "role": r["role"], "text": r["text"], "thinking": r["thinking"],
+                      "inner_voice": r["inner_voice"] or "",
                       "created_at": r["created_at"].isoformat(), "rolled": r["rolled"]} for r in msgs],
         "ledger": {d.isoformat(): t for d, t in (await get_ledger(pool, user_id)).items()},
         "settings": await get_settings(pool, user_id),

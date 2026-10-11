@@ -176,9 +176,12 @@ struct MessageDTO: Decodable, Identifiable {
     var thinkingMs: Int?
     /// 搬家搬来的那段第一条上：「Claude ·《标题》· 日期」，画成一行灰字（10-05）
     var divider: String?
+    /// 回复后的心声（10-11）：这一轮最后一张小卡片；没开 / 老消息是 nil 或空
+    var innerVoice: String?
     enum CodingKeys: String, CodingKey {
         case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider
         case thinkingMs = "thinking_ms"
+        case innerVoice = "inner_voice"
     }
 }
 

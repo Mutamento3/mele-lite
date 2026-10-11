@@ -50,6 +50,7 @@ struct ChatView: View {
 
     @AppStorage("showThinking") private var showThinking = true
     @AppStorage("showActionCards") private var showActionCards = true
+    @AppStorage("innerVoiceOpen") private var innerVoiceOpen = true      // 心声卡片默认展开（10-11）
     @AppStorage("showTimestamps") private var showTimestamps = true
     @AppStorage("chatAppearance") private var appearanceRaw = ChatAppearance.light.rawValue   // 新用户默认浅色（Aporia 10-04）
     @AppStorage("chatDarkWallpaper") private var chatDarkWallpaper = false
@@ -67,6 +68,8 @@ struct ChatView: View {
     @State private var showTour = false
     @State private var showWallpaper = false
     @State private var expandedThoughts: Set<Int> = []
+    /// 心声卡片里跟默认（innerVoiceOpen）相反的那几张：点过一下的
+    @State private var flippedVoices: Set<Int> = []
     @State private var highlightID: Int?
     @State private var selecting = false
     @State private var selectedIDs: Set<Int> = []
@@ -146,7 +149,7 @@ struct ChatView: View {
             case .thinking: return showThinking && !item.text.isEmpty   // 开头占位的那行不画（10-01 Aporia：还是只有三个点好看）
             case .card("divider"): return true                         // 搬来的那几段的分隔行，跟动作卡片开关无关
             case .card, .deeds: return showActionCards
-            case .text, .song, .sticker: return true
+            case .text, .song, .sticker, .innerVoice: return true
             }
         }
     }
@@ -611,6 +614,9 @@ struct ChatView: View {
                 Toggle(isOn: $showThinking) {
                     Label("思考过程", systemImage: "sparkles")
                 }
+                Toggle(isOn: $innerVoiceOpen) {
+                    Label("心声默认展开", systemImage: "heart.text.square")
+                }
             } label: {
                 Label("拓展显示", systemImage: "square.stack.3d.up")
             }
@@ -816,6 +822,7 @@ struct ChatView: View {
         h.combine(item)
         h.combine(ctx.stamps.contains(item.id))
         h.combine(expandedThoughts.contains(item.id))
+        h.combine(flippedVoices.contains(item.id) != innerVoiceOpen)
         h.combine(highlightID == item.id)
         h.combine(selectedIDs.contains(item.id))
         return h.finalize()
@@ -1045,6 +1052,8 @@ struct ChatView: View {
             VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
                 if item.kind == .thinking {
                     thoughtBlock(item)
+                } else if item.kind == .innerVoice {
+                    innerVoiceBlock(item)
                 } else {
                     if !item.attachments.isEmpty { attachmentsView(item) }
                     if !item.text.isEmpty {
@@ -1100,7 +1109,7 @@ struct ChatView: View {
                         .offset(y: -9)
                         .padding(.bottom, 2)
                 }
-                if item.kind != .thinking, showTime {
+                if item.kind != .thinking, item.kind != .innerVoice, showTime {
                     Text(Self.messageTime(item.at))
                         .font(Typo.sans(skin.size(Typo.Size.caption)).monospacedDigit())
                         .foregroundStyle(skin.timestamp)
@@ -1239,6 +1248,43 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 15).padding(.vertical, 13)
                 .background(ThoughtPanelBackground(skin: skin, style: thoughtStyle))
+            }
+        }
+    }
+
+    /// 回复后的心声（10-11）：这一轮最后一张小卡片。标题行「♡ 心声」点一下开 / 收；默认看「拓展显示」里的开关。
+    /// 跟思考同一套字号和玻璃，整体淡一点，不抢气泡。
+    private func innerVoiceBlock(_ item: ChatItem) -> some View {
+        let open = flippedVoices.contains(item.id) != innerVoiceOpen
+        return VStack(alignment: .leading, spacing: 7) {
+            Button {
+                if flippedVoices.contains(item.id) { flippedVoices.remove(item.id) } else { flippedVoices.insert(item.id) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.down")
+                        .font(Typo.icon(skin.size(9), .semibold))
+                        .rotationEffect(.degrees(open ? 0 : -90))
+                    Image(systemName: "heart")
+                        .font(Typo.icon(skin.size(10.5)))
+                    Text("心声")
+                        .font(Typo.sans(skin.size(Typo.Size.callout)))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(thoughtStyle.inkColor(fallback: skin.inkDim))
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if open {
+                Text(item.text)
+                    .font(Typo.sans(skin.size(Typo.Size.body)))
+                    .foregroundStyle(thoughtStyle.inkColor(fallback: skin.inkDim))
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 15).padding(.vertical, 13)
+                    .background(ThoughtPanelBackground(skin: skin, style: thoughtStyle).opacity(0.85))
             }
         }
     }

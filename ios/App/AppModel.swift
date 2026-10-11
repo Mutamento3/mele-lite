@@ -328,13 +328,28 @@ final class AppModel: ObservableObject {
         } catch { loadError = error.localizedDescription }
     }
 
-    func deleteCompanion(_ c: CompanionDTO) async {
+    /// 没删成返回一句给人看的原因
+    @discardableResult
+    func deleteCompanion(_ c: CompanionDTO) async -> String? {
+        #if LITE
+        // 本机模式删 TA 前先整个留一份（10-11）；没留成就不删，免得又是找不回来
+        if Lite.local {
+            let name = c.name
+            let made = await Task.detached(priority: .userInitiated) { () -> Error? in
+                do { try LocalBackup.autoBackup(before: name); return nil } catch { return error }
+            }.value
+            if let made {
+                return String(localized: "删之前没能先留一份备份（\(made.localizedDescription)），这次没删。")
+            }
+        }
+        #endif
         do {
             try await api.send("DELETE", "companions/\(c.id.lowercased)")
             companions.removeAll { $0.id == c.id }
             conversations[c.id] = nil
             pinned.remove(c.id)
-        } catch { loadError = error.localizedDescription }
+            return nil
+        } catch { loadError = error.localizedDescription; return error.localizedDescription }
     }
 
     /// 加联系人：名字 → （可选）头像 → 刷新 → 进它的第一个窗口

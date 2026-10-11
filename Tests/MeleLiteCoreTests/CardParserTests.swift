@@ -73,7 +73,27 @@ nonisolated(unsafe) let v2: [String: Any] = ["spec": "chara_card_v2", "data": [
         #expect(c.name == "阿橘的人设")
         #expect(c.persona == "## 角色\n阿橘的人设爱吃橘子，叫小满宝宝。")
         #expect(c.greetings.isEmpty && c.lore.isEmpty && c.avatarPNG == nil)
-        #expect(throws: CardError.self) { try CardParser.parse(Data("hello".utf8), userName: "", lang: .zh, fileName: "a.md") }
+        #expect(throws: CardError.self) { try CardParser.parse(Data("hello".utf8), userName: "", lang: .zh, fileName: "a.doc") }
+        let md = try CardParser.parse(Data("# 设定\n{{char}}怕冷。".utf8), userName: "小满", lang: .zh, fileName: "阿橘.md")   // 10-11 md 也认
+        #expect(md.name == "阿橘" && md.persona.contains("阿橘怕冷。"))
         #expect(throws: CardError.self) { try CardParser.parse(Data("  ".utf8), userName: "", lang: .zh, fileName: "a.txt") }
+    }
+
+    @Test func questionAnswerCard() throws {
+        let json = """
+        {"exported_name":"阿橘","companion_type":"Social","companion_subtype":"Platonic Friend",
+         "always_matters":[{"id":"how_do_you_want_to_define_personality","question":"How?","answer":"Custom Description"},
+                           {"id":"whats_your_mbti_type","question":"MBTI?","answer":""},
+                           {"id":"what_are_you_like_as_a_person","question":"What is %companion_name% like?","answer":"一只橘猫，爱晒太阳。"}],
+         "in_the_moment":[{"id":"how_should_you_treat_user","question":"x","answer":"把%user%当朋友。"},
+                          {"id":"brand_new_question","question":"Does %companion_name% like %user%?","answer":"yes"}]}
+        """
+        let c = try CardParser.parse(Data(json.utf8), userName: "小满", lang: .zh, fileName: "ajü.json")
+        #expect(c.name == "阿橘")
+        #expect(c.persona.hasPrefix("## 角色\n类型：Social · Platonic Friend\n\n### 阿橘是什么样的人\n一只橘猫，爱晒太阳。"))
+        #expect(c.persona.contains("## 你们之间\n### 阿橘怎么对待小满\n把小满当朋友。"))
+        #expect(c.persona.contains("### Does 阿橘 like 小满?\nyes"))       // 不认得的题用原问题
+        #expect(!c.persona.contains("Custom Description") && !c.persona.contains("MBTI"))
+        #expect(c.greetings.isEmpty && c.lore.isEmpty)
     }
 }

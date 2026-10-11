@@ -42,11 +42,14 @@ public enum CardParser {
             }
             obj = o; image = data
         } else if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if o["always_matters"] is [Any] || o["in_the_moment"] is [Any] {
+                return try qaCard(o, fileName: fileName, userName: userName, zh: zh)
+            }
             obj = o
-        } else if fileName.lowercased().hasSuffix(".txt"), let text = LoreImport.decodeText(data) {
+        } else if [".txt", ".md", ".markdown"].contains(where: fileName.lowercased().hasSuffix), let text = LoreImport.decodeText(data) {   // md 10-11 内测反馈
             return try textCard(text, fileName: fileName, userName: userName, zh: zh)
         } else {
-            throw CardError(message: zh ? "只认 PNG、JSON 角色卡或 txt 人设" : "Only PNG / JSON character cards or a .txt persona")
+            throw CardError(message: zh ? "只认 PNG、JSON 角色卡或 txt / md 人设" : "Only PNG / JSON character cards or a .txt / .md persona")
         }
         let d = (obj["data"] as? [String: Any]) ?? obj
         let name = String((s(d["nickname"]).isEmpty ? s(d["name"]) : s(d["nickname"])).prefix(20))
@@ -68,9 +71,9 @@ public enum CardParser {
     /// txt 人设（10-11 内测反馈）：没有开场白、没有世界书；名字先用文件名，导进来以后能改
     static func textCard(_ text: String, fileName: String, userName: String, zh: Bool) throws -> ParsedCard {
         let body = text.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { throw CardError(message: zh ? "这个 txt 是空的" : "This .txt is empty") }
+        guard !body.isEmpty else { throw CardError(message: zh ? "这个文件是空的" : "This file is empty") }
         guard body.count <= maxText else {
-            throw CardError(message: zh ? "这个 txt 太长了（超过 \(maxText) 字）" : "This .txt is too long")
+            throw CardError(message: zh ? "这个文件太长了（超过 \(maxText) 字）" : "This file is too long")
         }
         let stem = ((fileName as NSString).lastPathComponent as NSString).deletingPathExtension.trimmingCharacters(in: .whitespaces)
         let name = String(stem.prefix(20)).isEmpty ? "TA" : String(stem.prefix(20))
@@ -78,6 +81,63 @@ public enum CardParser {
         return ParsedCard(name: name, persona: persona(["description": body], f: { fill($0, char: name, user: user) }, zh: zh),
                           greetings: [], avatarPNG: nil, lore: [], creatorNotes: "", skippedLore: 0)
     }
+
+    /// 一问一答式的角色导出（10-11 内测反馈）：exported_name + always_matters / in_the_moment 两组
+    /// {id, question, answer}，问题里用 %companion_name% / %user% 占位。没答的题不要；认得的题中文换成中文小标题。
+    static func qaCard(_ o: [String: Any], fileName: String, userName: String, zh: Bool) throws -> ParsedCard {
+        let stem = ((fileName as NSString).lastPathComponent as NSString).deletingPathExtension
+        let name = String((s(o["exported_name"]).isEmpty ? (s(o["name"]).isEmpty ? stem : s(o["name"])) : s(o["exported_name"])).prefix(20))
+        guard !name.isEmpty else { throw CardError(message: zh ? "这张卡没有名字，读不出来" : "This card has no name") }
+        let user = userName.isEmpty ? (zh ? "你" : "you") : userName
+        func fillQA(_ t: String) -> String {
+            fill(t.replacingOccurrences(of: "%companion_name%", with: name).replacingOccurrences(of: "%user%", with: user), char: name, user: user)
+        }
+        var parts: [String] = []
+        let kind = [s(o["companion_type"]), s(o["companion_subtype"])].filter { !$0.isEmpty }.joined(separator: " · ")
+        for (key, head) in [("always_matters", zh ? "## 角色" : "## Character"), ("in_the_moment", zh ? "## 你们之间" : "## Between you")] {
+            var block: [String] = []
+            if key == "always_matters" && !kind.isEmpty { block.append((zh ? "类型：" : "Type: ") + kind) }
+            for q in (o[key] as? [Any] ?? []).compactMap({ $0 as? [String: Any] }) {
+                let id = s(q["id"]), answer = fillQA(s(q["answer"]))
+                if answer.isEmpty || qaSkip.contains(id) { continue }
+                let title = (zh ? qaZH[id] : nil).map(fillQA) ?? fillQA(s(q["question"]))
+                block.append("### " + (title.isEmpty ? id : title) + "\n" + answer)
+            }
+            if !block.isEmpty { parts.append(head + "\n" + block.joined(separator: "\n\n")) }
+        }
+        let persona = parts.joined(separator: "\n\n")
+        guard !persona.isEmpty else { throw CardError(message: zh ? "这个文件里没有写角色设定" : "This file has no character details") }
+        guard persona.count <= maxText else {
+            throw CardError(message: zh ? "这张卡的文字太长了（超过 \(maxText) 字）" : "This card's text is too long")
+        }
+        return ParsedCard(name: name, persona: persona, greetings: [], avatarPNG: nil, lore: [], creatorNotes: "", skippedLore: 0)
+    }
+
+    /// 只是选项的题（「性格怎么定义：自定义描述」），答案对 TA 没用
+    static let qaSkip: Set<String> = ["how_do_you_want_to_define_personality"]
+    static let qaZH: [String: String] = [
+        "whats_your_mbti_type": "MBTI",
+        "what_are_you_like_as_a_person": "%companion_name%是什么样的人",
+        "personality_quirks_and_mannerisms": "小习惯和口头禅",
+        "situational_behaviors": "不同情况下会怎么做",
+        "flaws_agency_and_imperfections": "缺点和不完美",
+        "who_are_you_beyond_this_relationship": "这段关系以外的%companion_name%",
+        "what_does_user_need_from_you": "%user%需要%companion_name%做什么",
+        "how_should_you_treat_user": "%companion_name%怎么对待%user%",
+        "whats_our_story": "%companion_name%和%user%的故事",
+        "big_memories_and_milestones": "不能忘的大事",
+        "inside_jokes_and_recurring_bits": "只有你们懂的梗",
+        "your_story_accomplishments_struggles_dreams": "%companion_name%的经历、难处和梦想",
+        "current_relationship_status": "现在有多亲近",
+        "if_other_describe_status": "关系（补充）",
+        "shared_interests": "你们都喜欢的",
+        "favorites_and_avoidances": "%companion_name%喜欢和避开的",
+        "little_things_to_remember": "要记住的关于%user%的小事",
+        "sensitive_topics_preferences": "敏感话题和偏好",
+        "what_do_you_hope_for_with_user": "%companion_name%对%user%的期待",
+        "important_people_in_companions_life": "%companion_name%生命里重要的人",
+        "additional_information": "补充",
+    ]
 
     static func s(_ v: Any?) -> String { (v as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
 

@@ -125,6 +125,7 @@ async def test_last_turn_tools_show_up_next_turn_and_history_stays_stable(pool, 
                               ("sticky_note", {"text": "下周问考试成绩"})]}, "记下啦", "好呀", "嗯"])
     d = make_deps(pool, m)
     await native(pool, user_a)
+    await archive.save_settings(pool, user_a, {**(await archive.get_settings(pool, user_a)), "thinking_style_every": 1})   # 每轮都贴风格，好看位置
     await turn(d, user_a, "我对芒果过敏")
     stored = await archive.unrolled(pool, user_a)
     assert stored[1].tools == "记住「小满对芒果过敏」\n写了便利贴"
@@ -298,3 +299,17 @@ async def test_sentinel_failure_falls_back_to_raw_line(pool, user_a):
     d.sentinel = True
     ev = await turn(d, user_a, "它回来就一直蔫蔫的")
     assert [e["text"] for e in of(ev, "bubble")] == ["嗯嗯"]              # 哨兵挂了这一轮照常回
+
+
+async def test_inner_voice_is_cut_out_stored_and_sent(pool, user_a):
+    await archive.save_settings(pool, user_a, {**(await archive.get_settings(pool, user_a)), "inner_voice": True})
+    m = FakeModel(["来，下地。\n\n[心声]\n她喊得又急又霸道。\n[/心声]", "嗯"])
+    d = make_deps(pool, m)
+    ev = await turn(d, user_a, "不想动")
+    assert "【心声】" in m.requests[0].system[0].text and "〔心声〕" in m.requests[0].messages[-1].text
+    assert [e["text"] for e in of(ev, "bubble")] == ["来，下地。"]
+    assert [e["text"] for e in of(ev, "inner_voice")] == ["她喊得又急又霸道。"]
+    stored = await archive.unrolled(pool, user_a)
+    assert stored[1].text == "来，下地。" and stored[1].inner_voice == "她喊得又急又霸道。"
+    await turn(d, user_a, "好吧")
+    assert m.requests[1].messages[1].text == "来，下地。\n\n（当时心里：她喊得又急又霸道。）"
