@@ -69,6 +69,7 @@ final class LocalHost: @unchecked Sendable {
         case ("PUT", 3) where p[0] == "messages" && p[2] == "reaction": return react(Int(p[1]), r.json["emoji"] as? String, bubble: r.json["bubble"] as? Int)
         case ("DELETE", 3) where p[0] == "messages" && p[2] == "reaction": return react(Int(p[1]), nil, bubble: r.query["bubble"].flatMap(Int.init))
         default:
+            if let res = await LocalGroups.handle(r, host: self) { return res }     // 群聊（10-11）
             if let res = await LocalVoice.handle(r, host: self) { return res }
             if let res = await LocalMCP.handle(r, host: self) { return res }
             if let res = await LocalImport.handle(r, host: self) { return res }
@@ -292,6 +293,7 @@ final class LocalHost: @unchecked Sendable {
         for cv in store.conversations where (cv["companion_id"] as? String) == id {
             _ = deleteConversation(cv["id"] as? String ?? "")
         }
+        LocalGroups.companionRemoved(self, id)          // 自动退群，说过的话留着
         store.companions = store.companions.filter { ($0["id"] as? String) != id }
         store.removeFile("avatar-\(id).jpg")
         LocalMemory.dropVault(store, companion: id)     // TA 单独那本记忆一起删（共用的不动）
@@ -437,6 +439,12 @@ final class LocalHost: @unchecked Sendable {
         return store.companion(cid)
     }
 
+    /// 一条消息按谁的设定拆气泡：群里看说话的那个 TA
+    func settings(forMessage m: [String: Any], in conv: String) -> [String: Any] {
+        let comp = (m["speaker"] as? String).flatMap { store.companion($0) } ?? companion(ofConversation: conv)
+        return comp?["settings"] as? [String: Any] ?? [:]
+    }
+
     func messageOut(_ m: [String: Any], settings: [String: Any]) -> [String: Any] {
         let role = m["role"] as? String ?? "user"
         let text = m["text"] as? String ?? ""
@@ -453,16 +461,17 @@ final class LocalHost: @unchecked Sendable {
         return ["id": m["id"] ?? 0, "role": role, "text": text, "thinking": m["thinking"] ?? "",
                 "thinking_ms": m["thinking_ms"] ?? NSNull(), "inner_voice": m["inner_voice"] ?? "", "at": m["at"] ?? "", "bubbles": shown, "voices": voices, "cards": m["cards"] ?? [Any](),
                 "reaction": m["reaction"] ?? NSNull(), "reactions": Self.perBubble(m, count: shown.count),
-                "attachments": atts, "divider": m["divider"] ?? NSNull()]
+                "attachments": atts, "divider": m["divider"] ?? NSNull(),
+                "speaker": m["speaker"] ?? NSNull(), "speaker_name": m["speaker_name"] ?? NSNull()]
     }
 
     private func messages(_ conv: String, _ q: [String: String]) -> LocalResponse {
-        guard let comp = companion(ofConversation: conv) else { return .error(404, String(localized: "没有这个窗口")) }
+        let comp = companion(ofConversation: conv)
+        guard comp != nil || LocalGroups.group(store, conv) != nil else { return .error(404, String(localized: "没有这个窗口")) }
         // 它的一天：今天第一次进这个人的聊天，后台排今天的行程（没世界先起世界）
-        if let cid = comp["id"] as? String, LocalMap.lifeOn(store, cid), LocalMap.today(store, cid).isEmpty {
+        if let cid = comp?["id"] as? String, LocalMap.lifeOn(store, cid), LocalMap.today(store, cid).isEmpty {
             Task { await LocalMap.ensureDay(self, cid) }
         }
-        let settings = comp["settings"] as? [String: Any] ?? [:]
         let all = store.messages(conv)
         let limit = max(1, min(Int(q["limit"] ?? "200") ?? 200, 500))
         var picked: [[String: Any]]
@@ -478,7 +487,7 @@ final class LocalHost: @unchecked Sendable {
             let after = Int(q["after"] ?? "0") ?? 0
             picked = Array(all.filter { ($0["id"] as? Int ?? 0) > after }.suffix(limit))
         }
-        var out: [String: Any] = ["messages": picked.map { messageOut($0, settings: settings) }, "busy": brain.busy(conv)]
+        var out: [String: Any] = ["messages": picked.map { messageOut($0, settings: settings(forMessage: $0, in: conv)) }, "busy": brain.busy(conv)]
         if let hasMore { out["has_more"] = hasMore }
         return .json(out)
     }
@@ -528,7 +537,7 @@ final class LocalHost: @unchecked Sendable {
             store.saveMessages(conv, list)
             return .empty
         }
-        let settings = companion(ofConversation: conv)?["settings"] as? [String: Any] ?? [:]
+        let settings = settings(forMessage: list[i], in: conv)
         let parts = Bubbles.split(list[i]["text"] as? String ?? "", cap: settings["max_bubbles"] as? Int ?? 6,
                                   offline: settings["long_mode"] as? Bool ?? false)
         let quote = parts.indices.contains(b) ? (LocalVoice.isVoice(parts[b]) ? LocalVoice.asText(parts[b]) : parts[b]) : ""

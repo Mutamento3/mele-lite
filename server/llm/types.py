@@ -56,7 +56,7 @@ class Usage:
     cache_read: int = 0          # 从缓存读的输入（便宜）
     cache_write: int = 0         # 写进缓存的输入（Claude 要多收一点）
     output: int = 0
-    cache_known: bool = True     # False = 对方没报缓存用量（中转站常见），缓存数不可信
+    cache_known: bool = True     # False = 对方没报缓存用量，这一轮的缓存数不作数
     cache_write_1h: int = 0      # cache_write 里按 1 小时档写的那部分（Claude 收 2 倍，5 分钟档 1.25 倍）
 
     @property
@@ -79,7 +79,7 @@ class ChatRequest:
     rounds: list[ToolRound] = field(default_factory=list)   # 这一轮已经发生的工具来回
     max_tokens: int = 8000
     thinking: bool = False
-    user_tag: str = ""           # 固定的用户标记（哈希），给中转站把同一个人粘在同一个后端
+    user_tag: str = ""           # 固定的用户标记（哈希）：同一个人的请求尽量落在同一处
 
 
 @dataclass

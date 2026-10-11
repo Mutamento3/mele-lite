@@ -31,6 +31,9 @@ struct MessageListView: View {
     @State private var friendAlt: AltDTO?
     @State private var managingAlts = false
     @State private var deletingAltWindow: (CompanionDTO, ConversationDTO)?
+    /// 群（10-11）
+    @State private var creatingGroup = false
+    @State private var deletingGroup: GroupDTO?
     /// 现在是小号：Messages 整页换成它加的好友
     private var altNow: AltDTO? { model.activeAlt.flatMap { id in model.alts.first { $0.id == id } } }
 
@@ -50,6 +53,16 @@ struct MessageListView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+        }
+        .sheet(isPresented: $creatingGroup) {
+            NewGroupSheet().environmentObject(model).environmentObject(theme).presentationDetents([.large])
+        }
+        .confirmationDialog("删除这个群？", isPresented: Binding(get: { deletingGroup != nil }, set: { if !$0 { deletingGroup = nil } }),
+                            titleVisibility: .visible) {
+            Button("删除", role: .destructive) { if let g = deletingGroup { Task { await model.deleteGroup(g) } } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("群里的聊天记录一起删掉，TA 们记住的不动。")
         }
         .sheet(isPresented: $managingAlts) {
             AltManagerSheet(onNew: { creatingAlt = true })
@@ -180,8 +193,58 @@ struct MessageListView: View {
 
     // MARK: 大号：联系人（带展开的窗口）
 
+    /// 联系人和群混在一个列表里：置顶的联系人在前，其余按最后一条的时间排（10-11 群聊）
+    private enum Entry: Identifiable {
+        case companion(CompanionDTO), group(GroupDTO)
+        var id: UUID { switch self { case .companion(let c): c.id; case .group(let g): g.id } }
+    }
+
+    private var entries: [Entry] {
+        let pinnedOnes = model.sortedCompanions.filter { model.pinned.contains($0.id) }.map(Entry.companion)
+        var rest: [(Date, Entry)] = model.sortedCompanions.filter { !model.pinned.contains($0.id) }
+            .map { (model.lastAt($0.id) ?? .distantPast, .companion($0)) }
+        rest += model.groups.map { ($0.lastAt, .group($0)) }
+        return pinnedOnes + rest.sorted { $0.0 > $1.0 }.map(\.1)
+    }
+
+    private func groupRow(_ g: GroupDTO) -> some View {
+        Button { model.openGroup(g) } label: {
+            HStack(spacing: 12) {
+                GroupAvatar(group: g, size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(g.displayName).font(Typo.sans(Typo.Size.headline, .semibold)).foregroundStyle(theme.ink).lineLimit(1)
+                        Text("\(g.members.count)").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                        Spacer()
+                        Text(ChatTime.short(g.lastAt)).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                    }
+                    HStack {
+                        Text(g.preview.isEmpty ? String(localized: "刚建的群，说句话吧") : g.preview)
+                            .font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.inkDim).lineLimit(1)
+                        Spacer()
+                        if model.isUnread(g) { UnreadDot() }
+                    }
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .cardSurface()
+    }
+
     @ViewBuilder private var mainSection: some View {
-                ForEach(model.sortedCompanions) { c in
+                ForEach(entries) { entry in
+                    switch entry {
+                    case .group(let g):
+                        groupRow(g)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) { deletingGroup = g } label: { Label("删除", systemImage: "trash") }
+                            }
+                    case .companion(let c):
                     companionBlock(c)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -196,6 +259,7 @@ struct MessageListView: View {
                             }
                             .tint(theme.accentDeep)
                         }
+                    }
                 }
                 if showNotOnlyLumi {
                     notOnlyLumi
@@ -244,6 +308,15 @@ struct MessageListView: View {
                 Menu {
                     Button { adding = true } label: { Label("加联系人", systemImage: "person.badge.plus") }
                     Button { friendAlt = altNow; addingFriend = true } label: { Label("加好友", systemImage: "magnifyingglass") }
+                    if altNow == nil && model.companions.count >= 2 {       // 群只属于大号（10-11）
+                        Button { creatingGroup = true } label: { Label("发起群聊", systemImage: "person.3") }
+                    }
+                } label: { plusIcon }
+            } else if model.companions.count >= 2 {
+                // 连着 Host（10-11）：也能发起群聊
+                Menu {
+                    Button { adding = true } label: { Label("加联系人", systemImage: "person.badge.plus") }
+                    Button { creatingGroup = true } label: { Label("发起群聊", systemImage: "person.3") }
                 } label: { plusIcon }
             } else {
                 Button { adding = true } label: { plusIcon }

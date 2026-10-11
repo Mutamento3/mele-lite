@@ -30,6 +30,8 @@ struct ChatItem: Identifiable, Hashable {
     /// 服务器消息号；本机回显、这一轮还在推的是 nil
     var messageID: Int?
     let mine: Bool
+    /// 群里是哪个 TA（10-11）；私聊、你自己的是 nil
+    var speaker: UUID? = nil
     var kind: Kind
     var text: String
     var at: Date
@@ -125,6 +127,7 @@ struct ChatItem: Identifiable, Hashable {
             out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + bubbles.count + peeks.count), messageID: m.id,
                                 mine: false, kind: .innerVoice, text: voice, at: m.at))
         }
+        if let sp = m.speaker { for i in out.indices where !out[i].mine { out[i].speaker = sp } }
         return out
     }
 }
@@ -146,6 +149,8 @@ final class ChatStore: ObservableObject {
 
     @Published private(set) var items: [ChatItem] = []
     @Published var typing = false
+    /// 群里正在打字的是谁（10-11）
+    @Published var typingName: String?
     @Published private(set) var connected = false
     @Published var errorText: String?
     @Published private(set) var loadingOlder = false
@@ -590,12 +595,13 @@ final class ChatStore: ObservableObject {
         lastEventAt = Date()
         switch ev.type {
         case "typing":
+            typingName = ev.speakerName
             if liveDone { live = []; liveDone = false; rebuild() }     // 上一轮的真身没补上：先收掉
             if live.isEmpty {
                 Task { await catchUp() }                                // 这一轮刚开始（还没推出东西）：TA 那句已经存了，换成真身
                 // 思考链先占好最上面那一行（10-01 Aporia：卡片先挂上、思考写完才到，插到最上面会把卡片挤下去，一跳一跳的）。
                 // 思考到了填进这一行，谁都不挪；这一轮没有思考就在 done 时撤掉
-                live.insert(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .thinking, text: "", at: Date()), at: 0)
+                live.insert(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .thinking, text: "", at: Date()), at: 0)
                 rebuild()
             }
             typing = true
@@ -605,7 +611,7 @@ final class ChatStore: ObservableObject {
                 live[i].text = ev.text ?? ""
                 live[i].thinkingMs = ev.ms
             } else {
-                live.insert(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .thinking,
+                live.insert(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .thinking,
                                      text: ev.text ?? "", at: Date(), thinkingMs: ev.ms), at: 0)
             }
             rebuild()
@@ -621,27 +627,27 @@ final class ChatStore: ObservableObject {
                     live[i].kind = .deeds(list + [deed])
                 } else {
                     let at = live.firstIndex(where: { $0.kind != .thinking }) ?? live.count
-                    live.insert(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .deeds([deed]), text: "", at: Date()), at: at)
+                    live.insert(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .deeds([deed]), text: "", at: Date()), at: at)
                 }
                 rebuild()
                 return
             }
-            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false,
+            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker,
                                  kind: ev.song.map { .song($0) } ?? ev.stickerID.map { .sticker($0) } ?? .card(ev.kind ?? ""), text: ev.text ?? "", at: Date()))
             if let why = ev.song?.why, !why.isEmpty {
-                live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .text, text: why, at: Date()))
+                live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .text, text: why, at: Date()))
             }
             if let song = ev.song, song.queue == true {   // 一起听页开着：排进「音乐」的播放队列
                 NotificationCenter.default.post(name: .lumiSongQueued, object: nil, userInfo: ["song": song])
             }
             rebuild()
         case "bubble":
-            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .text,
+            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .text,
                                  text: ev.text ?? "", at: Date(), voice: ev.voice))
             typing = false               // 同一次刷新里：三个点直接换成正文
             rebuild()
         case "inner_voice":              // 心声（10-11）：这一轮说完了才到，排最后
-            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, kind: .innerVoice, text: ev.text ?? "", at: Date()))
+            live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .innerVoice, text: ev.text ?? "", at: Date()))
             rebuild()
         case "notice":
             errorText = ev.text
@@ -649,6 +655,9 @@ final class ChatStore: ObservableObject {
             errorText = ev.message ?? "出了点问题"
             typing = false
             dropEmptyThinking()
+        case "round_end":                // 群里这一串都说完了（10-11）
+            typing = false
+            typingName = nil
         case "done":
             typing = false
             liveDone = true

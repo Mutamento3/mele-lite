@@ -4,7 +4,7 @@
 - DeepSeek：思考链在 delta.reasoning_content；开关在 extra_body={"thinking": {...}}；
   缓存命中数在 usage.prompt_cache_hit_tokens。思考模式下调工具，接着调时要把 reasoning_content 原样还回去。
 - OpenAI：新模型用 max_completion_tokens；带 prompt_cache_key 让同一个人的请求落到同一台机器、多命中缓存。
-- 中转站常常不报缓存用量——那就标 cache_known=False，不把「没报」当成「没命中」。
+- 对方没报缓存用量时标 cache_known=False：用量那边记「不知道」，不记成 0。
 """
 from __future__ import annotations
 

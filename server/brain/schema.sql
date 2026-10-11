@@ -842,3 +842,24 @@ CREATE TABLE IF NOT EXISTS mcp_servers (          -- 用户自己的 MCP 服务�
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS mcp_servers_account_idx ON mcp_servers (account_id);
+
+-- 群聊（10-11，跟 Lite 一套）：群是一种窗口（kind = group），不挂在哪个联系人名下（companion_id 空），
+-- 成员在 group_members；TA 说的话记下是谁说的（speaker_id + 名字，TA 删了也认得）
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'dm';
+ALTER TABLE conversations ALTER COLUMN companion_id DROP NOT NULL;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS avatar_ver INT NOT NULL DEFAULT 0;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS max_rounds INT NOT NULL DEFAULT 6;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS new_member_sees_history BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_speaker UUID;
+CREATE TABLE IF NOT EXISTS group_members (
+  conversation_id UUID        NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  companion_id    UUID        NOT NULL,                    -- 不挂外键：TA 删了，它在群里说过的话还认得是谁
+  position        INT         NOT NULL DEFAULT 0,
+  joined_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  left_at         TIMESTAMPTZ,                             -- 不空 = 被踢了 / 删掉了（以前的成员）
+  PRIMARY KEY (conversation_id, companion_id)
+);
+CREATE INDEX IF NOT EXISTS group_members_companion_idx ON group_members (companion_id);
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_id UUID;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_name TEXT NOT NULL DEFAULT '';

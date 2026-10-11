@@ -13,10 +13,20 @@ struct LocalMemoryItemRow: Identifiable, Equatable {
     var importance: Int
     var resolved: Bool
     var createdAt: Date
+    /// 记得这件事的 TA 名字（10-11 群聊：两个以上才显示「阿橘和小满都记得」）
+    var byNames: [String]
 
     init(_ m: LocalMemory.Item) {
         id = m.id; kind = m.kind; title = m.title; content = m.content; tags = m.tags
         importance = m.importance; resolved = m.resolved; createdAt = m.createdAt
+        let s = LocalHost.shared.store
+        byNames = m.by.compactMap { s.companion($0) }.map { ($0["persona"] as? [String: Any])?["name"] as? String ?? "TA" }
+    }
+
+    var sharedLine: String? {
+        guard byNames.count >= 2 else { return nil }
+        let head = byNames.dropLast().joined(separator: "、")
+        return String(localized: "\(head)和\(byNames.last!)都记得")
     }
 }
 
@@ -156,6 +166,9 @@ struct LocalMemoryListBody: View {
                 }
                 Spacer()
                 Text("重要 \(m.importance)").font(Typo.sans(11)).foregroundStyle(theme.inkFaint)
+            }
+            if let line = m.sharedLine {
+                Text(line).font(Typo.sans(11)).foregroundStyle(theme.inkFaint)
             }
         }
         .contentShape(Rectangle())

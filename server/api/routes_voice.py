@@ -40,7 +40,7 @@ async def speak(mid: int, body: dict = Body(...), acc: UUID = Depends(account), 
     """念给我听：{index} = 它那条消息的第几个气泡。念过的直接回。"""
     pool = a.deps.pool
     row = await pool.fetchrow(
-        """SELECT m.text, c.companion_id FROM chat_messages m JOIN conversations c ON c.id = m.user_id
+        """SELECT m.text, coalesce(m.speaker_id, c.companion_id) AS companion_id FROM chat_messages m JOIN conversations c ON c.id = m.user_id
            WHERE m.id = $1 AND c.account_id = $2 AND m.role = 'assistant'""", mid, acc)
     if row is None:
         raise HTTPException(400, "只能念它说的话")

@@ -8,7 +8,7 @@ Mele 是我从零开始写的。一路上，很多想法来自大家无私公开
 如果你在名单上但不想被提到，或者你觉得你应该在名单上，请私信告知我，会立马改正：
 小红书：Mele（94587369760）　GitHub：aporia-and-poros
 
-**也特别感谢无花果（赚钱养机 @Cheneyc51436310），她帮助了我很多，也是她无私公开分享作品和想法，启发我开始做 Mele。**
+**也特别感谢无花果（赚钱养机 @Cheneyc51436310），她帮助了我很多，也是她无私公开分享作品和想法，启发我开始做 Mele。Mele Host 里处理中转站缓存的几条做法——不看模型自报的停下原因、统一走流式、给请求带固定的用户标记——借用了她公开的教程《relay-cache-where-it-breaks》里的思路。**
 
 ## 想法从哪里来
 
@@ -66,7 +66,7 @@ For everything listed below, I borrowed only the idea: all code, writing and ima
 If you're on this list and would rather not be, or you think you should be on it, please message me and I'll correct it right away:
 Xiaohongshu (RED): Mele (94587369760) · GitHub: aporia-and-poros
 
-**Special thanks also to 无花果 (赚钱养机 @Cheneyc51436310), who has helped me a lot — and it was her generously shared work and ideas that inspired me to start Mele.**
+**Special thanks also to 无花果 (赚钱养机 @Cheneyc51436310), who has helped me a lot — and it was her generously shared work and ideas that inspired me to start Mele. A few of the ways Mele Host handles relay caching — not trusting the stop reason the model reports, always streaming, and tagging requests with a fixed user marker — borrow ideas from her public guide *relay-cache-where-it-breaks*.**
 
 ## Where the ideas came from
 

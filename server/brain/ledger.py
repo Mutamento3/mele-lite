@@ -172,7 +172,8 @@ def one_line(text: str, lang: str) -> str:
     return re.sub(r"\s*\n+\s*", "" if lang == "zh" else " ", text).strip()
 
 
-def day_transcripts(msgs: list[StoredMsg], tz: str, lang: str, user_name: str = "") -> dict[date, list[str]]:
+def day_transcripts(msgs: list[StoredMsg], tz: str, lang: str, user_name: str = "",
+                    group: bool = False) -> dict[date, list[str]]:
     """按用户那边的日期拆开，每天拼成「[时:分] 我：……」的原文；一天太长就分几段（每段 ≤ CHUNK_CHARS）。"""
     z = ZoneInfo(tz)
     sep = "：" if lang == "zh" else ": "
@@ -182,7 +183,9 @@ def day_transcripts(msgs: list[StoredMsg], tz: str, lang: str, user_name: str = 
         if m.role == "wake":              # 〔醒来〕整段不抄进账，只记一句「我自己醒来找 TA」
             line = f"[{t:%H:%M}] {WAKE_LINE[lang]}"
         else:
-            line = f"[{t:%H:%M}] {speaker(m.role, lang, user_name)}{sep}{m.text}"
+            who_said = (m.speaker_name or "TA") if group and m.role == "assistant" else \
+                (who(user_name, lang, "Subj") if group else speaker(m.role, lang, user_name))   # 群账本每行写名字（10-11）
+            line = f"[{t:%H:%M}] {who_said}{sep}{m.text}"
         lines.setdefault(t.date(), []).append(line[:CHUNK_CHARS])
     out: dict[date, list[str]] = {}
     for d, ls in lines.items():
@@ -404,11 +407,68 @@ async def _short(adapter, models: list[str], prompt: str, source: str, max_len: 
 
 
 async def write_entry(adapter, models: list[str], transcript: str, d: date, existing: str, *,
-                      name: str, lang: str, user_name: str = "") -> tuple[str | None, Spent]:
-    """一天（的一段）原文 → 一小段新账，接在那天已有的账后面。模型看不到旧账，只看得到最后一句。"""
+                      name: str, lang: str, user_name: str = "", group: str | None = None) -> tuple[str | None, Spent]:
+    """一天（的一段）原文 → 一小段新账，接在那天已有的账后面。模型看不到旧账，只看得到最后一句。
+    group = 群名（10-11 群账本）：每个人都写名字，不查「名字写太多次」那道人称闸。"""
+    if group is not None:
+        prompt, limit = group_write_prompt(transcript, d, existing, group=group, lang=lang)
+        return await _short(adapter, models, prompt, f"{transcript}\n{existing}", round(limit * 1.5),
+                            name="", lang=lang, label=f"group write {d}", user_name=user_name)
     prompt, limit = write_prompt(transcript, d, existing, name=name, lang=lang, user_name=user_name)
     return await _short(adapter, models, prompt, f"{transcript}\n{existing}", round(limit * 1.5),
                         name=name, lang=lang, label=f"write {d}", user_name=user_name)
+
+
+# ── 群账本（10-11，跟 Lite 的 LocalEcho.groupWritePrompt / groupAgePrompt 同一份文案） ──
+
+def group_write_prompt(transcript: str, d: date, existing: str, *, group: str, lang: str) -> tuple[str, int]:
+    limit = entry_budget(len(transcript), lang)
+    last = existing[-120:]
+    if lang == "zh":
+        tail = f"- 这一天已有的账最后一句是：「{last}」——接着往下写，别重复。\n" if existing.strip() else ""
+        return (f"下面是群「{group}」里的一段聊天，全部发生在 {day_label(d, lang)}。把它写成一段 {limit} 字以内的账，接在这一天已有的账后面。\n\n"
+                "【人称】\n- 每个人都写名字，不用「我」「你」。说话人只看每行开头的名字，不按语气改判。\n\n"
+                "【写什么】\n- 事实脉络：发生了什么、谁说了哪句关键的话、谁跟谁接了话或拌了嘴、做了什么决定或约定、情绪在哪里转弯。\n"
+                "- 不抄原句，不写抒情和描写。只写聊天里真有的事，不续写，不补没有的人名、数字、计划。\n"
+                f"{tail}\n【输出】一段中文正文，{limit} 字以内，不带日期、不分行、不加前言。\n\n"
+                f"⟪聊天开始⟫\n{transcript}\n⟪聊天结束⟫\n\n再说一遍：{limit} 字以内。"), limit
+    tail = f"- The day's ledger so far ends with: \"{last}\" — carry on from there, don't repeat it.\n" if existing.strip() else ""
+    return (f"Below is part of a chat in the group \"{group}\", all on {day_label(d, lang)}. Write it up as one ledger paragraph of at most {limit} characters, to be appended to that day's existing ledger.\n\n"
+            "[Names]\n- Name everyone; never use \"I\" or \"you\". Who said what is decided only by the name at the start of each line, never by tone.\n\n"
+            "[What to write]\n- The factual thread: what happened, the key lines and who said them, who replied to or teased whom, decisions made, where the mood turned.\n"
+            "- Don't quote lines verbatim; no lyrical description. Only what is in the chat — don't continue it or add names, numbers or plans that aren't there.\n"
+            f"{tail}\n[Output] One paragraph of plain English, at most {limit} characters, no date, no line breaks, no preamble.\n\n"
+            f"⟪chat start⟫\n{transcript}\n⟪chat end⟫\n\nOnce more: at most {limit} characters."), limit
+
+
+def group_age_prompt(text: str, d: date, age: int, quota: int, *, group: str, lang: str) -> str:
+    lo = round(quota * AGE_LO)
+    how_old = _HOW_OLD[lang](age)
+    if lang == "zh":
+        how = "- 大幅删除细节、原因和过程，只留一两句：这一天群里最要紧的事。" if age >= 3 else "- 删除过程和细节描写，保留原因、结果和情绪转折。"
+        return (f"下面是群「{group}」账本里 {day_label(d, lang)}（{how_old}）这一天的记录，账里每个人都写名字。\n\n"
+                "【核心指令：对这段记录执行二次压缩】\n⚠️ 注意：这段记录不是最终成品，必须进行二次裁剪与重构，不能原样交回！\n"
+                f"{how}\n- 写成一段 {lo}～{quota} 字的新概要，替换掉原来的。\n"
+                "- 照原记录写名字，不用「我」「你」；谁说的、谁做的照原记录，不改判。只写原记录里真有的事。\n\n"
+                f"【输出】一段中文正文，{lo}～{quota} 字，不带日期、不分行、不加前言。\n\n"
+                f"⟪记录开始⟫\n{text}\n⟪记录结束⟫\n\n再说一遍：{lo}～{quota} 字。")
+    how = ("- Cut details, reasons and process hard; keep one or two sentences: the most important thing in the group that day."
+           if age >= 3 else "- Cut the process and descriptive detail; keep causes, outcomes and turns of mood.")
+    return (f"Below is the entry for {day_label(d, lang)} ({how_old}) from the ledger of the group \"{group}\". Everyone in it is named.\n\n"
+            "[Core instruction: compress this entry a second time]\n⚠️ Note: this entry is NOT a finished product. It must be cut down and rewritten — do not hand it back as it is!\n"
+            f"{how}\n- Write one new summary paragraph of {lo}–{quota} characters to replace the old one.\n"
+            "- Keep everyone named, never \"I\" or \"you\"; keep who said and did what exactly as recorded. Only what is in the entry.\n\n"
+            f"[Output] One paragraph of plain English, {lo}–{quota} characters, no date, no line breaks, no preamble.\n\n"
+            f"⟪entry start⟫\n{text}\n⟪entry end⟫\n\nOnce more: {lo}–{quota} characters.")
+
+
+_GROUP_HEAD = {"zh": "〔群账本〕群里更早的聊天，远的模糊、近的清楚（账里都写名字，「{me}」就是你）：",
+               "en": "〔Group ledger〕Earlier in this group — older is hazier, recent is clearer (everyone is named; \"{me}\" is you):"}
+
+
+def render_group_ledger(days: dict[date, str], lang: str, me: str) -> str:
+    body = render_days(days)
+    return f"{_GROUP_HEAD[lang].format(me=me)}\n{body}" if body else ""
 
 
 def pieces(text: str, size: int) -> list[str]:
@@ -427,22 +487,25 @@ def pieces(text: str, size: int) -> list[str]:
 
 
 async def age_day(adapter, models: list[str], text: str, d: date, age: int, quota: int, *,
-                  name: str, lang: str, user_name: str = "") -> tuple[str | None, Spent]:
+                  name: str, lang: str, user_name: str = "", group: str | None = None) -> tuple[str | None, Spent]:
     """把超了配额的一天压短。没压短（照抄交回）也算压不动，返回 None，留着下次卷的时候再试。
     模型清单里标了 age_piece 的（DeepSeek：一大段压不动、小段压得动），长的一天先切块，各压到按长度分的那份配额。"""
     info = lookup(models[0])
     size = info.age_piece if info else None
     if not size or len(text) <= size:
-        prompt = age_prompt(text, d, age, quota, name=name, lang=lang, user_name=user_name)
-        short, spent = await _short(adapter, models, prompt, text, quota * 2, name=name, lang=lang,
+        prompt = group_age_prompt(text, d, age, quota, group=group, lang=lang) if group is not None else \
+            age_prompt(text, d, age, quota, name=name, lang=lang, user_name=user_name)
+        short, spent = await _short(adapter, models, prompt, text, quota * 2, name="" if group is not None else name, lang=lang,
                                     label=f"age {d}", user_name=user_name)
     else:
         short, spent = "", []
         floor = PIECE_MIN_QUOTA * LANG_SCALE.get(lang, 1)
         for i, part in enumerate(pieces(text, size)):
             q = max(floor, round(quota * PIECE_AIM * len(part) / len(text)))
-            prompt = age_prompt(part, d, age, q, name=name, lang=lang, user_name=user_name)
-            got, s = await _short(adapter, models, prompt, part, max(q * 2, len(part) - 1), name=name, lang=lang,
+            prompt = group_age_prompt(part, d, age, q, group=group, lang=lang) if group is not None else \
+                age_prompt(part, d, age, q, name=name, lang=lang, user_name=user_name)
+            got, s = await _short(adapter, models, prompt, part, max(q * 2, len(part) - 1),
+                                  name="" if group is not None else name, lang=lang,
                                   label=f"age {d} #{i + 1}", user_name=user_name)   # 小块比原来短就收：整天拼起来超了，下次卷再压
             spent += s
             short = join_text(short, got if got is not None else part, lang)   # 这块压不动就原样留着

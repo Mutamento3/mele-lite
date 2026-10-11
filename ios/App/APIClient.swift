@@ -135,6 +135,13 @@ final class APIClient: @unchecked Sendable {
         return try Self.decoder.decode(Ver.self, from: out).avatar_ver
     }
 
+    /// 换群头像（10-11）
+    func uploadGroupAvatar(group: UUID, data: Data) async throws -> GroupDTO {
+        let out = try await multipart("PUT", "groups/\(group.uuidString.lowercased())/avatar",
+                                      fileName: "avatar.jpg", mime: "image/jpeg", data: data)
+        return try Self.decoder.decode(GroupDTO.self, from: out)
+    }
+
     /// 导入酒馆角色卡（10-01）：preview = 只看不建；否则带上挑好的开场白和文风（chat / long）真导入
     func importCard(_ data: Data, fileName: String, preview: Bool, greeting: Int = 0, style: String = "chat") async throws -> Data {
         let lower = fileName.lowercased()

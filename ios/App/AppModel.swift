@@ -21,6 +21,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var loaded = false
     @Published var loadError: String?
     @Published private(set) var avatarImages: [UUID: UIImage] = [:]
+    /// 群（10-11，只有 Lite 小管家有）和自定义的群头像
+    @Published private(set) var groups: [GroupDTO] = []
+    @Published private(set) var groupAvatars: [UUID: UIImage] = [:]
     @Published private(set) var wakes: [UUID: WakesDTO] = [:]
 
     // 推开的层：首页 →（消息列表）→（聊天）
@@ -37,6 +40,8 @@ final class AppModel: ObservableObject {
         var incognito = false
         /// 小号窗口：TA 在这里把你当成谁（空 = 平常的你）
         var altName = ""
+        /// 群（10-11）：companion 是第一个成员（只占位）
+        var group: GroupDTO? = nil
         var id: UUID { conversation }
     }
 
@@ -102,6 +107,7 @@ final class AppModel: ObservableObject {
             loadError = nil
             loaded = true
             for c in list { await loadAvatar(c) }
+            await loadGroups()
             if let c = primaryCompanion { await loadWakes(c.id, days: 3) }   // 顺带写小组件快照
             await syncTimeZone()
             await refreshFriends()
@@ -236,6 +242,58 @@ final class AppModel: ObservableObject {
         guard let data = try? await api.data("companions/\(c.id.lowercased)/avatar"), let img = UIImage(data: data) else { return }
         try? data.write(to: file)
         avatarImages[c.id] = img
+    }
+
+    // MARK: - 群（10-11）
+
+    func loadGroups() async {
+        groups = (try? await api.call("GET", "groups")) ?? []          // 连着 Host 的还没有群：空着
+        for g in groups { await loadGroupAvatar(g) }
+    }
+
+    func loadGroupAvatar(_ g: GroupDTO) async {
+        guard g.avatarVer > 0 else { groupAvatars[g.id] = nil; return }
+        let file = Self.avatarDir.appendingPathComponent("group-\(g.id.lowercased)-\(g.avatarVer).jpg")
+        if let img = UIImage(contentsOfFile: file.path) { groupAvatars[g.id] = img; return }
+        guard let data = try? await api.data("groups/\(g.id.lowercased)/avatar"), let img = UIImage(data: data) else { return }
+        try? data.write(to: file)
+        groupAvatars[g.id] = img
+    }
+
+    func group(_ id: UUID) -> GroupDTO? { groups.first { $0.id == id } }
+
+    /// 改完群（名字、成员、头像、轮数……）换上新的
+    func updateGroup(_ g: GroupDTO) async {
+        if let i = groups.firstIndex(where: { $0.id == g.id }) { groups[i] = g } else { groups.insert(g, at: 0) }
+        await loadGroupAvatar(g)
+        if chat?.group?.id == g.id { chat?.group = g }
+    }
+
+    func createGroup(name: String, members: [UUID]) async {
+        do {
+            let g: GroupDTO = try await api.call("POST", "groups", json: ["name": name, "members": members.map(\.lowercased)])
+            groups.insert(g, at: 0)
+            openGroup(g)
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    func openGroup(_ g: GroupDTO) {
+        guard let first = g.members.compactMap({ companion($0) }).first ?? companions.first else { return }
+        chat = ChatTarget(companion: first, conversation: g.id, group: g)
+    }
+
+    func deleteGroup(_ g: GroupDTO) async {
+        _ = try? await api.raw("DELETE", "groups/\(g.id.lowercased)")
+        groups.removeAll { $0.id == g.id }
+        if chat?.group?.id == g.id { chat = nil }
+    }
+
+    func isUnread(_ g: GroupDTO) -> Bool {
+        guard !g.preview.isEmpty else { return false }
+        guard let t = seen[g.id.lowercased] else { return true }
+        return g.lastAt.timeIntervalSince1970 > t + 1
     }
 
     private static var avatarDir: URL {
@@ -377,6 +435,7 @@ final class AppModel: ObservableObject {
         if target.incognito { return }
         markSeen(target.conversation)
         chattedOnce = true
+        if target.group != nil { await loadGroups(); return }
         if let convs: [ConversationDTO] = try? await api.call("GET", "companions/\(target.companion.id.lowercased)/conversations") {
             conversations[target.companion.id] = convs.filter { $0.altName.isEmpty }
             altWindows[target.companion.id] = convs.filter { !$0.altName.isEmpty }

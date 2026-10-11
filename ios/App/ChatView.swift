@@ -42,6 +42,9 @@ struct ChatView: View {
     var onSettings: (() -> Void)? = nil
     /// 小号窗口（Lite）：TA 在这里把你当成谁（空 = 平常的你）
     var altName = ""
+    /// 群（10-11）：标题换群名、⋯ 里是群设定；每个 TA 按 speaker 画自己的头像和名字
+    var group: GroupDTO? = nil
+    var memberLook: [UUID: MemberLook] = [:]
     private var isMoment: Bool { momentAnchor != nil }
     @Environment(\.dismiss) private var dismissMoment
     /// 它的名字：ChatRoom 进来时写一次，改备注时跟着变
@@ -419,7 +422,7 @@ struct ChatView: View {
                 quotingBar(quoted)
             }
             // 水位（Lite，10-04 Aporia）：左下角一小行，当前多少 token · 还剩多少满
-            if Lite.local && !isMoment {
+            if Lite.local && !isMoment && group == nil {
                 GaugeLine(api: chat.api, conversation: chat.conversation, tick: chat.typing, skin: skin)
             }
             inputBar
@@ -448,20 +451,29 @@ struct ChatView: View {
                         .fill(chat.connected ? Color.green : Color.orange)
                         .frame(width: 6, height: 6)
                         .accessibilityLabel(chat.connected ? "connected" : "reconnecting")
+                    if let group {
+                        // 群：群名（人数）；有人在打字就换成「阿橘 正在输入…」
+                        Text(chat.typing && !(chat.typingName ?? "").isEmpty ? "\(chat.typingName!) 正在输入…"
+                                                                           : "\(group.displayName)（\(group.members.count)）")
+                            .font(Typo.sans(skin.size(Typo.Size.headline), .semibold))
+                            .foregroundStyle(skin.ink)
+                            .lineLimit(1)
+                    } else {
                     Text(companionName)
                         .font(Typo.sans(skin.size(Typo.Size.headline), .semibold))
                         .foregroundStyle(skin.ink)
+                    }
                 }
                 // 长按名字改备注（10-04 Aporia：之前自用的 App里一直这么用）
                 .contentShape(Rectangle())
                 .onLongPressGesture(minimumDuration: 0.4) {
-                    guard !isMoment else { return }
+                    guard !isMoment, group == nil else { return }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     nameDraft = companionName
                     renaming = true
                 }
                 // 你们的关系（09-29 Aporia，照之前自用的 App胶囊里的爱心）：朋友两个人、恋人爱心、家人小房子、搭子并肩；点开 TA 的设定
-                if let icon = Self.relationshipIcon(companionRelationship), !isMoment {
+                if let icon = Self.relationshipIcon(companionRelationship), !isMoment, group == nil {
                     Button { onSettings?() } label: {
                         Image(systemName: icon)
                             .font(Typo.icon(11))
@@ -474,7 +486,7 @@ struct ChatView: View {
                     .contentTransition(.symbolEffect(.replace))
                 }
                 // 线下（长文）开着：一个小标，点一下回到日常（10-01 Aporia：「转线下」要一眼看得到、一点就切）
-                if longModeOn, !isMoment {
+                if longModeOn, !isMoment, group == nil {
                     Button { longModeOn = false; Task { await pushLongMode(false) } } label: {
                         Text("线下")
                             .font(Typo.sans(skin.size(Typo.Size.caption), .semibold))
@@ -626,9 +638,11 @@ struct ChatView: View {
                 Label("我的气泡", systemImage: "bubble.left.and.bubble.right")
             }
             // 线下 = 长文模式：场景、动作、心理整段写，不切成一泡一泡（真值在服务器；10-01 改名）
+            if group == nil {
             Toggle(isOn: Binding(get: { longModeOn },
                                  set: { on in longModeOn = on; Task { await pushLongMode(on) } })) {
                 Label("线下（长文）", systemImage: "theatermasks")
+            }
             }
             Divider()
             // 改备注挪进了「TA 的设定」（09-28：菜单太长，TA 的设定被挤到要滚才看得到）
@@ -646,13 +660,13 @@ struct ChatView: View {
                     }
                 }
                 if let onSettings {
-                    Button { onSettings() } label: { Label("TA 的设定", systemImage: "slider.horizontal.3") }
+                    Button { onSettings() } label: { Label(group == nil ? "TA 的设定" : "群设定", systemImage: "slider.horizontal.3") }
                 }
             }
         } label: {
             pillIcon("ellipsis").coachMark("more")
         }
-        .task { await fetchLongMode() }
+        .task { if group == nil { await fetchLongMode() } }
     }
 
     // MARK: - 长文模式、改备注（都存服务器的联系人设置 / 人设）
@@ -781,7 +795,7 @@ struct ChatView: View {
             // 头像是一整串的抬头，单独占一行
             if bubbleLayout == .header, ctx.avatars.contains(item.id) {
                 rows.append(.avatar(item.id))
-                keys[.avatar(item.id)] = item.mine ? 1 : 0
+                keys[.avatar(item.id)] = item.mine ? 1 : (item.speaker?.hashValue ?? 0)
             }
             rows.append(.message(item.id))
             keys[.message(item.id)] = rowKey(item, ctx: ctx)
@@ -821,6 +835,7 @@ struct ChatView: View {
         var h = Hasher()
         h.combine(item)
         h.combine(ctx.stamps.contains(item.id))
+        h.combine(ctx.avatars.contains(item.id))
         h.combine(expandedThoughts.contains(item.id))
         h.combine(flippedVoices.contains(item.id) != innerVoiceOpen)
         h.combine(highlightID == item.id)
@@ -850,7 +865,7 @@ struct ChatView: View {
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity)
         case .avatar(let id):
-            avatarHeader(mine: ctx.byID[id]?.mine == true)
+            avatarHeader(mine: ctx.byID[id]?.mine == true, speaker: ctx.byID[id]?.speaker)
         case .typing:
             typingBubble
         case .newer:
@@ -997,22 +1012,25 @@ struct ChatView: View {
     /// 「头像在上面」：一串里只有第一行（思考链算在这一串里，而且经常就是第一行——它先想，再说）
     private func avatarIDs(_ list: [ChatItem]) -> Set<Int> {
         var out: Set<Int> = []
-        var speaker: Bool?
-        for item in list where item.mine != speaker {
+        var speaker: String?
+        for item in list where Self.runKey(item) != speaker {
             out.insert(item.id)
-            speaker = item.mine
+            speaker = Self.runKey(item)
         }
         return out
     }
 
+    /// 一串 = 同一个人连着说的（群里不同 TA 断开，10-11）
+    private static func runKey(_ item: ChatItem) -> String { item.mine ? "me" : (item.speaker?.uuidString ?? "ai") }
+
     /// 「头像在旁边」：每一串里第一条走气泡的（卡片不走气泡、也不缩进，头像落在它身上没地方挂）
     private func sideAvatarIDs(_ list: [ChatItem]) -> Set<Int> {
         var out: Set<Int> = []
-        var speaker: Bool?
+        var speaker: String?
         var pending = false
         for item in list {
-            if item.mine != speaker {
-                speaker = item.mine
+            if Self.runKey(item) != speaker {
+                speaker = Self.runKey(item)
                 pending = true
             }
             if pending, !Self.isCard(item) {
@@ -1047,9 +1065,12 @@ struct ChatView: View {
         HStack(alignment: .top, spacing: 8) {
             if mine { Spacer(minLength: 0) }
             if !mine, bubbleLayout == .side {
-                sideAvatar(show: showAvatar, mine: false, overhang: item.kind == .thinking)
+                sideAvatar(show: showAvatar, mine: false, overhang: item.kind == .thinking, speaker: item.speaker)
             }
             VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
+                if group != nil, !mine, showAvatar, bubbleLayout == .side {
+                    speakerName(item.speaker).padding(.leading, 4)
+                }
                 if item.kind == .thinking {
                     thoughtBlock(item)
                 } else if item.kind == .innerVoice {
@@ -1081,8 +1102,8 @@ struct ChatView: View {
                             }
                             .fixedSize(horizontal: false, vertical: true)
                         }
-                        Text(RichText.render(item.quoteParsed?.body ?? item.text, size: skin.size(Typo.Size.headline),
-                                             ink: skin.bubbleInk(mine: mine)))
+                        Text(mentionLit(RichText.render(item.quoteParsed?.body ?? item.text, size: skin.size(Typo.Size.headline),
+                                                        ink: skin.bubbleInk(mine: mine))))
                             .font(Typo.sans(skin.size(Typo.Size.headline)))
                             .foregroundStyle(skin.bubbleInk(mine: mine))
                         }
@@ -1317,15 +1338,47 @@ struct ChatView: View {
 
     /// 「头像在旁边」那一列：整串都留 30pt，只有第一条真的放头像。
     /// overhang：挂在思考链那一行时头像不撑高这一行，往下探出去落在第一条气泡旁边
-    private func sideAvatar(show: Bool, mine: Bool, overhang: Bool) -> some View {
+    /// 群里 TA 的头像（按 speaker）；其余照旧
+    @ViewBuilder
+    private func avatar(mine: Bool, speaker: UUID?, size: CGFloat) -> some View {
+        if group != nil, !mine {
+            MemberAvatar(look: speaker.flatMap { memberLook[$0] }, size: size)
+        } else {
+            AvatarView(who: mine ? .me : .ai, size: size)
+        }
+    }
+
+    /// 群里一串开头的名字小字
+    private func speakerName(_ speaker: UUID?) -> some View {
+        Text(speaker.flatMap { memberLook[$0]?.name } ?? "TA")
+            .font(Typo.sans(skin.size(Typo.Size.caption)))
+            .foregroundStyle(skin.inkDim)
+    }
+
+    /// 群里气泡中的 @名字 用主题色加粗
+    private func mentionLit(_ s: AttributedString) -> AttributedString {
+        guard group != nil else { return s }
+        var out = s
+        for name in memberLook.values.map(\.name) where !name.isEmpty {
+            var from = out.startIndex
+            while from < out.endIndex, let r = out[from...].range(of: "@" + name) {
+                out[r].foregroundColor = theme.accent
+                out[r].font = Typo.sans(skin.size(Typo.Size.headline), .semibold)
+                from = r.upperBound
+            }
+        }
+        return out
+    }
+
+    private func sideAvatar(show: Bool, mine: Bool, overhang: Bool, speaker: UUID? = nil) -> some View {
         Group {
             if show, overhang {
                 Color.clear.frame(width: 30, height: 20)
                     .overlay(alignment: .top) {
-                        AvatarView(who: mine ? .me : .ai, size: 30).offset(y: -5)
+                        avatar(mine: mine, speaker: speaker, size: 30).offset(y: -5)
                     }
             } else if show {
-                AvatarView(who: mine ? .me : .ai, size: 30)
+                avatar(mine: mine, speaker: speaker, size: 30)
                     .frame(width: 30, height: 30)
             } else {
                 // 空位只占宽不占高：不然这一行被撑成头像那么高
@@ -1334,10 +1387,11 @@ struct ChatView: View {
         }
     }
 
-    private func avatarHeader(mine: Bool) -> some View {
-        HStack(spacing: 0) {
+    private func avatarHeader(mine: Bool, speaker: UUID? = nil) -> some View {
+        HStack(spacing: 6) {
             if mine { Spacer(minLength: 0) }
-            AvatarView(who: mine ? .me : .ai, size: 32)
+            avatar(mine: mine, speaker: speaker, size: 32)
+            if group != nil, !mine { speakerName(speaker) }
             if !mine { Spacer(minLength: 0) }
         }
         .padding(.top, 4)
@@ -1434,6 +1488,7 @@ struct ChatView: View {
                 // 草稿住在 DraftField 自己家里：她打的每一个字都会重画拥有它的那个视图。
                 // 输入框换行了要吱一声：底栏的高度是 UIKit 那边按实际宽度量的，自己感知不到 SwiftUI 里的换行
                 DraftField(draftKey: draftKey, placeholder: "对\(companionName)说点什么…", skin: skin,
+                           mentionNames: group == nil ? [] : (group?.members ?? []).compactMap { memberLook[$0]?.name },
                            onHeightChange: { _ in listHandle.barContentChanged() },
                            onVoice: isMoment ? nil : { data, secs in Task { await chat.sendVoice(data, seconds: secs) } }) { typed in
                     var text = typed
@@ -2103,8 +2158,12 @@ private struct DraftField: View {
     @State private var voiceActive = false
 
     /// 草稿一个窗口一份（09-28：以前全局一份，换个联系人草稿跟着串过去）
-    init(draftKey: String, placeholder: String, skin: ChatSkin, onHeightChange: @escaping (CGFloat) -> Void,
+    /// 群里能 @ 的名字（10-11）：打了 @ 就在输入框上面浮一排
+    var mentionNames: [String] = []
+
+    init(draftKey: String, placeholder: String, skin: ChatSkin, mentionNames: [String] = [], onHeightChange: @escaping (CGFloat) -> Void,
          onVoice: ((Data, Double) -> Void)? = nil, onSend: @escaping (String) -> Void) {
+        self.mentionNames = mentionNames
         self.onVoice = onVoice
         _draft = AppStorage(wrappedValue: "", draftKey)
         self.placeholder = placeholder
@@ -2117,9 +2176,29 @@ private struct DraftField: View {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var showMentions: Bool { !mentionNames.isEmpty && draft.hasSuffix("@") }
+
     var body: some View {
         // 录语音时输入框让开，录音条放进来（10-03）
         if !voiceActive {
+        VStack(alignment: .leading, spacing: 6) {
+        // 群里打了 @：输入框上面一排成员（10-11）。放在排版里而不是浮层——浮出底栏的部分点不到
+        if showMentions {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(mentionNames, id: \.self) { name in
+                        Button { draft += name + " " } label: {
+                            Text("@" + name)
+                                .font(Typo.sans(Typo.Size.callout, .medium))
+                                .foregroundStyle(skin.ink)
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .background(paintedChrome(Capsule(), skin: skin))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
         // 提示字自己上色：系统默认的灰压在深色玻璃上几乎看不见
         TextField("", text: $draft, prompt: Text(placeholder).foregroundStyle(skin.inkDim.opacity(0.8)), axis: .vertical)
             .lineLimit(1...4)
@@ -2154,6 +2233,8 @@ private struct DraftField: View {
                     }
                 }
             }
+        }
+        .onChange(of: showMentions) { _, _ in onHeightChange(0) }
 
         }
         if let onVoice, !sendable {

@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from brain import accounts, archive, attachments, books, reactions, rewind
+from brain import accounts, archive, attachments, books, groups, reactions, rewind
+from brain.group_run import run_group
 from brain import voice
 from brain.bubbles import split_reply
 from brain.scope import Scope
@@ -38,6 +39,31 @@ def _runner(a: Api, scope: Scope):
     return run
 
 
+def _group_runner(a: Api, acc: UUID, gid: UUID):
+    """群（10-11）：一串说完；切走了的话最后说话那个 TA 的那句推过去"""
+    async def run(text: str, resend: bool, emit, attachments: list, parts: list) -> None:
+        room = a.rooms.room(gid)
+        room.interrupt = False
+        said = await run_group(a.deps, acc, gid, text, emit, lambda: room.interrupt, resend=resend, parts=parts,
+                               attachments=attachments)
+        await accounts.touch_conversation(a.deps.pool, gid, a.deps.now())
+        if said and not a.rooms.watched(gid):
+            reply = next((m for m in reversed(await archive.recent(a.deps.pool, gid, 3)) if m.role == "assistant"), None)
+            if reply is not None and reply.speaker:
+                await patrol_store.queue_push(a.deps.pool, account=acc, companion=reply.speaker, conversation=gid,
+                                              text=f"{reply.speaker_name}：{reply.text}")
+    return run
+
+
+async def _settings_of(a: Api, scope: Scope, speaker: UUID | None = None) -> Settings:
+    """这个窗口按谁的设定：私聊 = 窗口的 TA；群 = 说话的那个 TA，没有就第一个成员"""
+    who = speaker or scope.companion
+    if who is None:
+        first = await groups.members(a.deps.pool, scope.conversation)
+        who = first[0] if first else None
+    return Settings.from_dict(await archive.get_settings(a.deps.pool, who)) if who else Settings()
+
+
 @router.post("/conversations/{conv}/messages", status_code=202)
 async def send(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """发一句：先进等候区，安静满 reply_wait 秒才跑。回复从 /events 推。
@@ -50,8 +76,11 @@ async def send(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account),
         raise HTTPException(400, "附件编号不对") from None
     if not text and not files:
         raise HTTPException(400, "说点什么吧")
-    wait = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion)).reply_wait
+    wait = (await _settings_of(a, scope)).reply_wait
     client_id = str(body["client_id"]) if body.get("client_id") else None
+    if scope.companion is None:      # 群（10-11）
+        queued = a.rooms.submit(conv, text, client_id, wait, _group_runner(a, acc, conv), files, interrupt=True)
+        return {"queued": queued, "client_id": client_id, "reply_wait": wait}
     if body.get("book_mark_id"):     # 「划线说两句」（10-02 书架）：它接下来的回话抄一份进页边
         await books.arm_thread(a.deps.pool, acc, conv, int(body["book_mark_id"]), a.deps.now())
     elif text:                       # 说了别的就收线
@@ -89,7 +118,8 @@ async def events(conv: UUID, request: Request, acc: UUID = Depends(account), a: 
 
 def _msg(m: archive.StoredMsg) -> dict:
     return {"id": m.id, "role": m.role, "text": m.text, "thinking": m.thinking, "thinking_ms": m.thinking_ms,
-            "inner_voice": m.inner_voice, "at": m.created_at.isoformat()}
+            "inner_voice": m.inner_voice, "at": m.created_at.isoformat(),
+            "speaker": str(m.speaker) if m.speaker else None, "speaker_name": m.speaker_name or None}
 
 
 @router.get("/conversations/{conv}/messages")
@@ -108,16 +138,17 @@ async def messages(conv: UUID, after: int = 0, before: int | None = None, day: s
             d = date.fromisoformat(day)
         except ValueError:
             raise HTTPException(400, "day 要写成 2026-09-27") from None
-        tz = ZoneInfo(Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion)).tz)
+        tz = ZoneInfo((await _settings_of(a, scope)).tz)
         start = datetime.combine(d, time(0), tzinfo=tz)
         msgs = await archive.between(a.deps.pool, conv, start, start + timedelta(days=1), limit)
     else:
         msgs = await archive.after(a.deps.pool, conv, after, limit)
     shown = [m for m in msgs if m.role != "wake"]
-    settings = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))
+    by_speaker = {sp: await _settings_of(a, scope, sp) for sp in {m.speaker for m in shown}}   # 群里每个 TA 按自己的设定切
 
     def bubbles(m: archive.StoredMsg) -> list[str]:       # 跟事件流里推的一样切；TA 连发的几句还原成几个
         if m.role == "assistant":
+            settings = by_speaker[m.speaker]
             return split_reply(m.text, settings.max_bubbles, settings.long_mode)
         return m.parts or [m.text]
     marks = await reactions.for_messages(a.deps.pool, [m.id for m in shown])
@@ -154,7 +185,7 @@ async def messages(conv: UUID, after: int = 0, before: int | None = None, day: s
 async def calendar(conv: UUID, acc: UUID = Depends(account), a: Api = Depends(api)):
     """聊天日历：哪几天聊过（按联系人时区）、那天说了几句、那天第一句的号（点日期从那句开始看）。〔醒来〕不算。"""
     scope = await own_conversation(a, acc, conv)
-    tz = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion)).tz
+    tz = (await _settings_of(a, scope)).tz
     rows = await a.deps.pool.fetch(
         "SELECT to_char(created_at AT TIME ZONE $2, 'YYYY-MM-DD') AS day, count(*) AS n, min(id) AS first_id "
         "FROM chat_messages WHERE user_id = $1 AND role <> 'wake' GROUP BY 1 ORDER BY 1", conv, tz)
@@ -190,6 +221,10 @@ async def do_rewind(conv: UUID, body: dict = Body(...), acc: UUID = Depends(acco
     try:
         if role == "user":
             return {"kind": "edit", "text": await rewind.rewind_to_user(a.deps.pool, a.deps.embedder, scope, mid)}
+        if scope.companion is None:  # 群：点哪个 TA 的都一样——你那句之后大家说的全撤，重新来一串
+            await rewind.undo_group_round(a.deps.pool, a.deps.embedder, scope, mid)
+            a.rooms.run_now(conv, _group_runner(a, acc, conv), resend=True)
+            return {"kind": "regenerate"}
         await rewind.undo_reply(a.deps.pool, a.deps.embedder, scope, mid)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -210,8 +245,9 @@ async def _which_bubble(a: Api, acc: UUID, conv: UUID, mid: int, bubble: int) ->
     if bubble < 0:
         return "", True
     scope = await own_conversation(a, acc, conv)
-    settings = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))
-    text = await a.deps.pool.fetchval("SELECT text FROM chat_messages WHERE id = $1", mid) or ""
+    r = await a.deps.pool.fetchrow("SELECT text, speaker_id FROM chat_messages WHERE id = $1", mid)
+    settings = await _settings_of(a, scope, r["speaker_id"] if r else None)
+    text = (r["text"] if r else "") or ""
     parts = split_reply(text, settings.max_bubbles, settings.long_mode)
     if bubble >= len(parts):
         return "", False
@@ -253,8 +289,8 @@ async def translate_thinking(mid: int, acc: UUID = Depends(account), a: Api = De
     from brain.auth import TrialOver
     from brain.translate import thinking_zh
     conv, role = await _owned_message(a, acc, mid)
-    r = await a.deps.pool.fetchrow("SELECT m.thinking, c.companion_id FROM chat_messages m JOIN conversations c "
-                                   "ON c.id = m.user_id WHERE m.id = $1", mid)
+    r = await a.deps.pool.fetchrow("SELECT m.thinking, coalesce(m.speaker_id, c.companion_id) AS companion_id "
+                                   "FROM chat_messages m JOIN conversations c ON c.id = m.user_id WHERE m.id = $1", mid)
     if role != "assistant" or not (r["thinking"] or "").strip():
         raise HTTPException(400, "这句没有思考链")
     try:

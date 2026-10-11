@@ -47,6 +47,15 @@ async def undo_reply(pool, embedder, scope: Scope, message_id: int) -> None:
     await _cut(pool, embedder, scope, message_id, asked.id if asked else message_id)
 
 
+async def undo_group_round(pool, embedder, scope: Scope, message_id: int) -> None:
+    """群（10-11）：点任何一个 TA 的话 → 你最近那句之后大家说的全撤、那一串里写过的东西全撤，接着重新来一串"""
+    msgs, i = await _find(pool, scope, message_id, "assistant")
+    asked = next((j for j in range(i, -1, -1) if msgs[j].role == "user"), None)
+    if asked is None or asked + 1 >= len(msgs):
+        raise ValueError("这条不能倒回")
+    await _cut(pool, embedder, scope, msgs[asked + 1].id, msgs[asked].id)
+
+
 async def start_incognito(pool, account: UUID, companion: UUID) -> Scope:
     conv = await accounts.new_conversation(pool, account, companion, incognito=True)
     return Scope(account, companion, conv, incognito=True)

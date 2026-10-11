@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 import memory as M
@@ -80,8 +80,20 @@ async def touch_conversation(pool, conversation_id: UUID, now: datetime) -> None
 
 # ── 删联系人、删号、导出、我的设定（2026-09-27，第 4 步正式接口） ──
 
+async def _groups_export(pool, account_id: UUID) -> list[dict]:
+    from . import groups
+    out = []
+    for g in await groups.list_for(pool, account_id):
+        info = await groups.out(pool, g)
+        data = await archive.export(pool, g["id"])
+        out.append({**info, "messages": data["messages"], "ledger": data["ledger"]})
+    return out
+
+
 async def _erase_companion(pool, companion_id: UUID) -> None:
     """一个联系人名下的一切：记忆、关于 TA、便利贴、设置、人设，它所有窗口的聊天、账本、状态、日志、倒回记账。"""
+    from . import groups
+    await groups.companion_removed(pool, companion_id, datetime.now(timezone.utc))     # 自动退群，说过的话留着（10-11）
     convs = [r["id"] for r in await pool.fetch("SELECT id FROM conversations WHERE companion_id = $1", companion_id)]
     for conv in convs:
         await attachments.wipe(pool, "conversation_id", conv)
@@ -171,6 +183,7 @@ async def export_account(pool, account_id: UUID) -> dict:
         "wallet": await wallet.export(pool, account_id),           # 钱包记账（10-02）
         "tarot": await tarot.export(pool, account_id),             # 塔罗档案（10-03）
         "companions": comps,
+        "groups": await _groups_export(pool, account_id),          # 群聊（10-11）：群、成员、聊天记录
         # 抽屉：拆过的带全文；没拆的只带日子——导出也不能拿来偷看（09-28）
         "drawer": [{"companion_id": str(r["companion_id"]), "written_at": r["created_at"].isoformat(),
                     "unlock_at": r["unlock_at"].isoformat() if r["unlock_at"] else None,

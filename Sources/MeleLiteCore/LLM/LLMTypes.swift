@@ -88,7 +88,12 @@ public enum UsageMeter {
     }
     private static let box = Box()
     public static func setSink(_ f: @escaping @Sendable (_ model: String, _ usage: Usage) -> Void) { box.lock.withLock { box.sink = f } }
-    static func report(_ model: String, _ u: Usage) { box.lock.withLock { box.sink }?(model, u) }
+    /// 给这一段调用记个用途（10-11 群聊判断：用量页上记成「模型 · 群聊判断」）；用 `UsageMeter.$tag.withValue("群聊判断") { … }`
+    @TaskLocal public static var tag: String?
+    static func report(_ model: String, _ u: Usage) {
+        let m = tag.map { "\(model) · \($0)" } ?? model
+        box.lock.withLock { box.sink }?(m, u)
+    }
 }
 
 public enum StreamEvent: Equatable, Sendable {

@@ -34,6 +34,7 @@ class Room:
     seen: deque = field(default_factory=lambda: deque(maxlen=SEEN_IDS))
     listeners: set = field(default_factory=set)       # 每个事件流一个 asyncio.Queue
     runner: Runner | None = None                      # 最近一次 submit 给的，醒来那轮跑完接着处理排着的用
+    interrupt: bool = False                           # 群里你插话了（10-11）：正在说的那个说完就停，后面排着的作废
 
 
 class Rooms:
@@ -74,7 +75,7 @@ class Rooms:
     # ── 等候区 ──
 
     def submit(self, conv: UUID, text: str, client_id: str | None, wait_seconds: float, runner: Runner,
-               attachments: list | None = None) -> bool:
+               attachments: list | None = None, *, interrupt: bool = False) -> bool:
         """排进等候区。同一个 client_id 来过就不再排（app 重发），返回 False。"""
         r = self.room(conv)
         if client_id:
@@ -88,6 +89,8 @@ class Rooms:
         r.files.extend(attachments or [])
         r.last_at = loop.time()
         r.wait = wait_seconds * self.wait_scale
+        if interrupt and r.running and not r.running.done():
+            r.interrupt = True
         idle = not (r.running and not r.running.done()) and not (r.timer and not r.timer.done())
         if idle:                         # 已经在等的话不用动：计时器醒来会按新的 last_at 接着等
             self._arm(conv, r)

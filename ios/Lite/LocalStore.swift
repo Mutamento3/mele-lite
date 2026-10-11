@@ -109,18 +109,23 @@ final class LocalStore: @unchecked Sendable {
     @discardableResult
     func addMessage(_ conv: String, role: String, text: String, thinking: String = "", thinkingMs: Int? = nil,
                     parts: [String]? = nil, cards: [[String: Any]] = [], attachments: [String] = [],
-                    innerVoice: String = "", at: Date = Date()) -> [String: Any] {
+                    innerVoice: String = "", speaker: String? = nil, at: Date = Date()) -> [String: Any] {
         lock.withLock {
             var m: [String: Any] = ["id": nextID("message"), "role": role, "text": text, "thinking": thinking,
                                     "at": LocalStore.iso(at), "cards": cards, "attachments": attachments]
             if let parts { m["parts"] = parts }
             if let thinkingMs, !thinking.isEmpty { m["thinking_ms"] = thinkingMs }
             if !innerVoice.isEmpty { m["inner_voice"] = innerVoice }        // 回复后的心声（10-11）
+            if let speaker {                                                 // 群里是哪个 TA 说的（10-11）；名字一起留，TA 删了也认得
+                m["speaker"] = speaker
+                m["speaker_name"] = (companion(speaker)?["persona"] as? [String: Any])?["name"] as? String ?? "TA"
+            }
             var list = messages(conv)
             list.append(m)
             saveMessages(conv, list)
             if var c = conversation(conv) {
                 c["last_at"] = LocalStore.iso(at)
+                if let speaker { c["last_speaker"] = speaker }
                 saveConversation(c)
             }
             m["conversation"] = conv

@@ -36,7 +36,7 @@ class ContextParts:
 
 
 def user_tag(user_id) -> str:
-    """给中转站粘后端用的固定标记：同一个人永远一样，但看不出是谁。"""
+    """固定的用户标记：同一个人永远一样，但看不出是谁；同一个人的请求尽量落在同一处。"""
     return hashlib.sha256(f"newapp:{user_id}".encode()).hexdigest()[:32]
 
 

@@ -58,7 +58,7 @@ struct MainTabView: View {
                          onNewWindow: { Task { await model.openNewWindow(target.companion) } },
                          onIncognito: { Task { await model.openNewWindow(target.companion, incognito: true) } },
                          onSettings: { model.settingsFor = target.companion },
-                         altName: target.altName)
+                         altName: target.altName, group: target.group)
                     .id(target.conversation)
                     .offset(x: chatX)
                     .overlay(alignment: .leading) { edgeHandle($chatX, close: closeChat) }
@@ -134,9 +134,14 @@ struct MainTabView: View {
         }
         .fullScreenCover(isPresented: $showDrawer) { DrawerView().environmentObject(model).environmentObject(theme) }
         .onReceive(NotificationCenter.default.publisher(for: PushDelegate.openFromPush)) { note in
-            // 点了通知：进那个人的那个窗口
+            // 点了通知：进那个人的那个窗口；群的进群
+            if note.userInfo?["group"] as? Bool == true, let conv = note.userInfo?["conversation"] as? UUID {
+                Task { if model.group(conv) == nil { await model.loadGroups() }; if let g = model.group(conv) { model.openGroup(g) } }
+                return
+            }
             guard let conv = note.userInfo?["conversation"] as? UUID, let comp = note.userInfo?["companion"] as? UUID,
                   let c = model.companion(comp) else { return }
+            if let g = model.group(conv) { model.openGroup(g); return }        // Host 推来的群消息（带的是说话那个 TA）
             model.openChat(c, conversation: conv)
         }
         .sheet(item: $model.settingsFor) { c in

@@ -635,6 +635,15 @@ struct CompanionSettingsView: View {
                 Text("中 · 3 万").tag(Int?.some(30_000))
                 Text("长 · 6 万").tag(Int?.some(60_000))
             } label: { row("记性长度", "原话留多长再卷进账本。越长越贵") }
+            // 一段脑子（10-11 群聊）：私聊和群里的事按时间穿插进来；只按条数，不限时间（本机和 Host 都有）
+            if Lite.on {
+                let n = store.s("other_rooms_count", 30)
+                VStack(alignment: .leading, spacing: 4) {
+                    row(String(localized: "别的房间记多少 · \(n.wrappedValue) 条"),
+                        String(localized: "在私聊里看得到群里最近的话，在群里看得到私聊最近的话（按时间穿插）。0 = 不合"))
+                    Slider(value: Binding(get: { Double(n.wrappedValue) }, set: { n.wrappedValue = Int($0 / 5) * 5 }), in: 0...100, step: 5)
+                }
+            }
             // 回声（Lite 本机也卷了，10-04）：按天记的账本，默认收着，点开能改
             if Lite.local {
                 NavigationLink {

@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
-from uuid import UUID
+from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
 import memory as M
@@ -32,6 +32,7 @@ from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
 from .context import ContextParts, build_request, render_volatile, user_tag
 from . import inner_voice, monologue
+from . import group as G, groups, model_noise, timeline
 from .inject import TEXTS, TurnFacts, reminder_lines, split_thinking, thinking_style
 from .scope import Scope
 from .persona import Persona, render_base, tone_lines
@@ -261,9 +262,71 @@ def now_and_then(state: dict, name: str, content: str, now: datetime, *, wake: b
     return content
 
 
+# ── 群聊（10-11，跟 Lite 的 LocalBrain.runTurn(group:) 同义） ──
+
+GROUP_TOOLS = ("memory_remember", "memory_search", "note_about_user", "read_manual")   # 群里第一步只开记忆那几样
+YOUR_TURN = {"zh": "（轮到你了）", "en": "(Your turn.)"}
+
+
+@dataclass(frozen=True)
+class GroupCtx:
+    """群里这一轮的背景：scope.companion 是说话的那个 TA，scope.conversation 是群"""
+    name: str                          # 群名（显示用）
+    others: tuple[str, ...]            # 别的成员名字
+    user_msg: int | None = None        # 这一串从用户哪句开始（倒回时撤它写过的记忆）
+    joined_at: datetime | None = None  # 后来拉进来的才有
+    sees_history: bool = True          # 新成员看不看得到进群前的
+
+
+def user_label(settings: Settings, lang: str) -> str:
+    """你在群里 / 别的房间里的称呼：设定里的名字，没有就用代词"""
+    if settings.user_name:
+        return settings.user_name
+    zh = lang == "zh"
+    return {"she": "她" if zh else "her", "he": "他" if zh else "him"}.get(settings.user_pronoun, "TA" if zh else "them")
+
+
+def group_history(stored: list[archive.StoredMsg], me: UUID, g: GroupCtx, user: str, lang: str) -> list[archive.StoredMsg]:
+    """群消息 → 这个 TA 看到的历史：只有它自己说的算 assistant；你和别的 TA 说的是 user，前面垫〔名字〕，
+    别人的心声 / 思考 / 用过的工具不进。后来拉进来的：开关开着看进群前最近 30 条（还没开过口就垫一句），关着只看进群以后的"""
+    if g.joined_at is not None:
+        before = [m for m in stored if m.created_at < g.joined_at]
+        after = [m for m in stored if m.created_at >= g.joined_at]
+        if not g.sees_history:
+            stored = after
+        elif before:
+            kept = before[-groups.HISTORY_ON_JOIN:]
+            stored = kept + after
+            if not any(m.role == "assistant" and m.speaker == me for m in after):
+                note = archive.StoredMsg(-1, "user", G.join_note(lang == "zh"), "", g.joined_at)
+                stored = kept + [note] + after
+    out = []
+    for m in stored:
+        if m.role == "assistant" and m.speaker not in (None, me):
+            out.append(replace(m, role="user", text=G.label(m.speaker_name or "TA") + m.text, thinking="", tools="",
+                               inner_voice=""))
+        elif m.role == "user" and m.id != -1:
+            out.append(replace(m, text=G.label(user) + m.text))
+        else:
+            out.append(m)
+    return out
+
+
+def squash(msgs: list[Msg]) -> list[Msg]:
+    """同一方连着的几条并成一段（插了别的房间 / 群里好几个人说话时才会连着）"""
+    out: list[Msg] = []
+    for m in msgs:
+        if out and out[-1].role == m.role and not out[-1].images and not m.images:
+            out[-1] = replace(out[-1], text=f"{out[-1].text}\n\n{m.text}")
+        else:
+            out.append(m)
+    return out
+
+
 async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, resend: bool = False,
                    wake: str | None = None, attachments: list | None = None,
-                   pieces: list[str] | None = None, free_trial: bool = False, quiet_food: bool = False) -> TurnOutcome:
+                   pieces: list[str] | None = None, free_trial: bool = False, quiet_food: bool = False,
+                   group: GroupCtx | None = None) -> TurnOutcome:
     """scope = 这一轮在谁的名下（brain/scope.py）：设置、人设、记忆归联系人，聊天、账本、状态归窗口，用量归账号。
     resend = 重新生成：用户那句已经在存档最后了（刚撤掉了它的回复），不再存一遍，直接再回一次。
     wake = 它自己醒来（巡逻）：这段〔醒来〕代替用户的话。它想事时的动静先压着，回 <silent> 就全丢、什么都不存；
@@ -287,13 +350,22 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     persona = Persona.from_dict(await archive.get_persona(pool, comp), lang)
     if scope.incognito:
         persona = replace(persona, call_user="")
-    state = await archive.get_state(pool, conv)
+    if group is not None:            # 群里：每个事件都带上是谁（App 按人画头像名字）
+        group_emit, me_name = emit, persona.name or "TA"
+
+        async def emit(ev: dict) -> None:        # noqa: F811
+            await group_emit({**ev, "speaker": str(comp), "speaker_name": me_name})
+    # 群里的状态（第几轮、想起过哪些、上一轮用过什么）按「群 × TA」分开存
+    state_key = uuid5(conv, str(comp)) if group is not None else conv
+    state = await archive.get_state(pool, state_key)
     turn_no = int(state.get("turn_count", 0)) + 1
     history = await files.decorate(pool, await archive.unrolled(pool, conv), lang)   # 带附件的那几句接上〔图片〕〔文件〕
     text_for_model, sent = text, []
     if wake:
         said = None
         text = next((m.text for m in reversed(history) if m.role == "user"), "")   # 联想拿 TA 最后说的那句当线索
+    elif group is not None:          # 群：你那句调度那层已经存了；text = 它上一句以后大家说的（联想用）
+        said = None
     elif resend:
         if not history or history[-1].role != "user":
             raise ValueError("没有可以重新回的那句")
@@ -304,6 +376,15 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         sent = await files.claim(pool, conv, attachments, said.id) if attachments else []
         text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
     edit_ref = None if scope.incognito or said is None else EditRef(conv, said.id)   # 倒回时按这一轮撤回它写过的东西
+    if group is not None and group.user_msg is not None:
+        edit_ref = EditRef(conv, group.user_msg)
+    ulabel = user_label(settings, lang)
+    if group is not None:
+        history = group_history(history, comp, group, ulabel, lang)
+    # 一段脑子（10-11）：别的房间最近 N 条按时间插进来；无痕不合
+    merged_rooms = [] if scope.incognito else await _safe(
+        groups.other_rooms(pool, comp, conv, settings.other_rooms_count, ulabel, lang), [])
+    history = timeline.merge(history, merged_rooms, settings.other_rooms_count)
     try:
         route = await resolve_route(deps.keys, scope)
     except TrialOver:
@@ -371,12 +452,20 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                   or thinking_style(settings, character=character))
                   if mode == "monologue" else "")
     hist, tools_note = history_msgs(history, lang)
+    user_text_now = with_tools_note(tools_note, wake or text_for_model)
+    if group is not None:            # 群：最后那几句（你和别的 TA 说的）就是这一轮要接的话；末尾是它自己的就提醒轮到它
+        tail_user: list[str] = []
+        while hist and hist[-1].role == "user":
+            tail_user.insert(0, hist.pop().text)
+        user_text_now = with_tools_note(tools_note, "\n\n".join(tail_user) or YOUR_TURN[lang])
+    if group is not None or merged_rooms:
+        hist = squash(hist)
     before, thinking_lines = split_thinking(lines, settings)
-    focus_note = "" if scope.incognito else await _safe(focus.pending_note(pool, conv, lang), "")
+    focus_note = "" if scope.incognito or group is not None else await _safe(focus.pending_note(pool, conv, lang), "")
     if focus_note:                   # 哨兵：刚结束的专注，这一轮告诉它一次
         before = [*before, focus_note]
     lore_all = [] if scope.incognito else await _safe(lore.list_for(pool, acc, comp), [])
-    if not scope.incognito:          # 标记表情：TA 给它哪句点了什么，这一轮告诉它一次
+    if not scope.incognito and group is None:          # 标记表情：TA 给它哪句点了什么，这一轮告诉它一次（群里第一步都不递）
         before = [*before, *await _safe(reactions.pending_lines(pool, conv, lang), [])]
         near = "\n".join(await _safe(far_dates.open_lines(pool, comp, now, settings.tz, lang), []))
         if now_and_then(state, "dates", near, now, wake=bool(wake)):      # 快到的远事：不每轮都给（09-30）
@@ -411,11 +500,13 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             before = [*before, side]
             state["side_at"], state["side_key"] = now.isoformat(), context_line.moment_key(items, now)
     outside = mcp.Toolbox()                      # 用户自己接的 MCP 服务（10-05，Host）：无痕不给；连不上的这一轮跳过
-    if not scope.incognito and settings.mcp_servers:
+    if not scope.incognito and group is None and settings.mcp_servers:
         outside = await _safe(mcp.toolbox(pool, getattr(deps.keys, "box", None), acc, settings.mcp_servers), mcp.Toolbox())
     parts = ContextParts(
-        tools=tool_specs(incognito=scope.incognito) + outside.specs,
-        base=render_base(persona, core, lang,
+        tools=[t for t in tool_specs() if t.name in GROUP_TOOLS] if group is not None
+        else tool_specs(incognito=scope.incognito) + outside.specs,
+        base=(G.room_rules(zh=lang == "zh", group=group.name, me=persona.name or "TA", user_name=ulabel,
+                           others=list(group.others)) + "\n\n" if group is not None else "") + render_base(persona, core, lang,
                          monologue="\n\n".join(x for x in (mono_rules, inner_voice.rules(settings) if settings.inner_voice else "") if x),
                          tone=tone_lines(lang, settings.warmth, settings.initiative, settings.humor)
                          + ([] if scope.incognito else voice.mode_lines(lang, settings.voice_mode)),
@@ -423,11 +514,12 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                          chat_rules=not settings.long_mode,
                          life=settings.offline_life or settings.long_mode,   # 线下生活关着：没有出门吃饭那两行（10-05）
                          talk=settings.talk_rules),                         # 用户自己写的说话规矩（10-05）     # 长文模式：拿掉「说话」那一节（10-01 Aporia）
-        ledger=ledger.render_ledger(await archive.get_ledger(pool, conv), state.get("voice_samples", []), lang,
-                                   settings.user_name),
+        ledger=ledger.render_group_ledger(await archive.get_ledger(pool, conv), lang, persona.name or "TA")
+        if group is not None else ledger.render_ledger(await archive.get_ledger(pool, conv), state.get("voice_samples", []), lang,
+                                                         settings.user_name),
         history=hist,
         volatile=render_volatile(now=now, tz=settings.tz, lang=lang, recall=recall, sticky=sticky, lines=before),
-        user_text=with_tools_note(tools_note, wake or text_for_model),
+        user_text=user_text_now,
         # 人设锚（10-01 Aporia：怕脱离人设）：离最新对话最近的一行，每轮十几个字
         tail="\n".join([*thinking_lines, *([inner_voice.hook(settings)] if settings.inner_voice else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
                          + ("" if settings.long_mode or settings.talk_rules.strip() else TEXTS[lang]["short"])]),
@@ -439,7 +531,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     await emit({"type": "typing"})
 
     ctx = ToolContext(pool=pool, embedder=deps.embedder, user_id=comp, account_id=acc, now=now, lang=lang,
-                      edit_ref=edit_ref, allowed=INCOGNITO_TOOLS if scope.incognito else None, tz=settings.tz,
+                      edit_ref=edit_ref, allowed=INCOGNITO_TOOLS if scope.incognito else (GROUP_TOOLS if group is not None else None),
+                      tz=settings.tz,
                       names=names, deps=deps, mcp=outside.route)
     started = time.monotonic()                   # 「思考了 x 秒」：从开口到说完（含中间调工具）
     try:
@@ -468,10 +561,13 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             await emit(ev)
         await archive.add_message(pool, conv, "wake", wake, now=now)
 
+    out.text = model_noise.strip(out.text)       # 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
     # 心声（10-11）：最后那段 [心声]…[/心声] 切下来，不进气泡、不念，存在这条上、单独推给 App 画小卡片
     voice_text = ""
     if settings.inner_voice:
         out.text, voice_text = inner_voice.split(out.text)
+    if group is not None:
+        out.text = G.strip_own_label(out.text, persona.name or "TA")
     if out.thinking.strip():
         await emit({"type": "thinking", "text": out.thinking, "ms": thinking_ms})
     bubbles_out = split_reply(out.text, settings.max_bubbles, settings.long_mode)
@@ -507,9 +603,13 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     if out.text.strip():
         saved = await archive.add_message(pool, conv, "assistant", out.text, thinking=out.thinking,
                                           tools="\n".join(out.tool_notes), cards=out.cards, thinking_ms=thinking_ms,
-                                          inner_voice=voice_text, now=deps.now())
+                                          inner_voice=voice_text, now=deps.now(),
+                                          speaker=comp if group is not None else None,
+                                          speaker_name=(persona.name or "TA") if group is not None else "")
         await _safe(voice.attach(pool, acc, clip_ids, saved.id), None)
-        if not wake and not scope.incognito:    # 「划线说两句」挂着线头：回话抄一份进页边（10-02 书架）
+        if group is not None:
+            await groups.set_last_speaker(pool, conv, comp)
+        if not wake and not scope.incognito and group is None:    # 「划线说两句」挂着线头：回话抄一份进页边（10-02 书架）
             await _safe(books.catch_reply(pool, acc, conv, comp, out.text, deps.now()), None)
 
     if recall is not None and out.text.strip():   # 浮上来的记忆，回复真用上了才算被想起（09-28 召回只读）
@@ -517,7 +617,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                 + [m.id for ms in recall.linked.values() for m in ms],
                                 out.text, names=names, now=now), [])
     state.update(turn_count=turn_no, last_tools=out.tools_used, last_prompt_tokens=out.last_prompt)
-    await archive.save_state(pool, conv, state)
+    await archive.save_state(pool, state_key, state)
     await archive.log_turn(pool, conv, {
         "turn": turn_no, "model": route.chat_model,
         "recall": {"full": [m.id for m in recall.full], "lines": [l.memory_id for l in recall.lines],
@@ -530,7 +630,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     info = lookup(route.chat_model)
     high_water = settings.memory_length or (info.high_water if info else DEFAULT_HIGH_WATER)
     if ledger.needs_roll(out.last_prompt, high_water):
-        await roll(deps, scope, route, adapter, settings, state, parts, day, emit)
+        await roll(deps, scope, route, adapter, settings, state, parts, day, emit, state_key=state_key, group=group)
     if trial_mark is not None and out.text.strip():   # 醒来不说话的成本我们认（上面已经提前返回了）
         spent = (await archive.usage_on(pool, acc, day))["cost_usd"] - trial_mark
         await charge_trial(pool, acc, round(spent * 1_000_000))
@@ -539,7 +639,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
 
 
 async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settings, state: dict,
-               parts: ContextParts, day: date, emit: Emit) -> None:
+               parts: ContextParts, day: date, emit: Emit, *, state_key: UUID | None = None,
+               group: GroupCtx | None = None) -> None:
     """卷账本：① 主模型先挑要长期记的（前缀跟刚才那轮一样，几乎全走缓存）② 便宜模型按天写新账
     ③ 超了天龄配额的天单独压 ④ 丢掉 14 天以前的、标记已卷、留腔调样本。
     写账失败：原文先留着，下一轮再试；连续失败提醒用户。账本只在这里动，平时不动，缓存不会无故作废。"""
@@ -571,18 +672,21 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
     write_legs = legs(route.chat_model if settings.ledger_same_as_chat else route.ledger_model)
     age_legs = legs(route.chat_model if settings.ledger_same_as_chat else (route.age_model or route.ledger_model))
     name = Persona.from_dict(await archive.get_persona(pool, scope.companion), lang).name
+    state_key = state_key or scope.conversation
+    group_name = group.name if group is not None else None      # 群账本（10-11）：用名字写，群里每个 TA 读同一本
     today = deps.now().astimezone(ZoneInfo(settings.tz)).date()
     days = await archive.get_ledger(pool, scope.conversation)
     stale = ledger.too_old(days, today)
 
     # ① 写新账：按天拆开，每天（太长就分段）单独写一小段接上去；任何一段写不出来 = 这次不卷
     ok = True
-    for d, chunks in sorted(ledger.day_transcripts(plan.rolled, settings.tz, lang, settings.user_name).items()):
+    for d, chunks in sorted(ledger.day_transcripts(plan.rolled, settings.tz, lang, settings.user_name,
+                                                   group=group is not None).items()):
         if (today - d).days >= ledger.MAX_DAYS:
             continue                                   # 反正留不住，不花这个钱
         for transcript in chunks:
             entry, spent = await ledger.write_entry(adapter, write_legs, transcript, d, days.get(d, ""),
-                                                    name=name, lang=lang, user_name=settings.user_name)
+                                                    name=name, lang=lang, user_name=settings.user_name, group=group_name)
             for model, usage in spent:
                 await _account(pool, scope.account, day, model, usage)
             if entry is None:
@@ -593,7 +697,7 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
             break
     if not ok:
         state["ledger_fails"] = int(state.get("ledger_fails", 0)) + 1
-        await archive.save_state(pool, scope.conversation, state)
+        await archive.save_state(pool, state_key, state)
         if state["ledger_fails"] >= LEDGER_FAIL_WARN:
             await emit({"type": "notice", "text": LEDGER_NOTICE[lang]})
         await emit({"type": "ledger", "status": "failed"})
@@ -602,7 +706,7 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
     # ② 压旧天：超了天龄配额的天单独压；压不动先留着，下次卷的时候再试
     for d, age, quota in ledger.over_quota(days, today, lang):
         short, spent = await ledger.age_day(adapter, age_legs, days[d], d, age, quota, name=name, lang=lang,
-                                            user_name=settings.user_name)
+                                            user_name=settings.user_name, group=group_name)
         for model, usage in spent:
             await _account(pool, scope.account, day, model, usage)
         if short is not None:
@@ -613,9 +717,9 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
     await archive.put_ledger(pool, scope.conversation, days, now=deps.now())
     await archive.mark_rolled(pool, scope.conversation, [m.id for m in plan.rolled])
     await edits.forget_up_to(pool, scope.conversation, plan.rolled[-1].id)
-    state["voice_samples"] = ledger.voice_samples(plan.rolled)
+    state["voice_samples"] = [] if group is not None else ledger.voice_samples(plan.rolled)
     state["ledger_fails"] = 0
     state["recall_seen"] = []            # 新的一潮：原文卷走了，靠联想的记忆可以重新浮上来
     state["lore_seen"] = {}              # 世界书也清零：递过的那几轮卷走了
-    await archive.save_state(pool, scope.conversation, state)
+    await archive.save_state(pool, state_key, state)
     await emit({"type": "ledger", "status": "done", "count": len(plan.rolled)})

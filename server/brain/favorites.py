@@ -48,7 +48,7 @@ async def add(pool, account: UUID, items: list[dict], *, group: bool, now: datet
     except (KeyError, TypeError, ValueError):
         raise FavoriteError("每条要带 message_id") from None
     rows = {r["id"]: r for r in await pool.fetch(
-        "SELECT m.id, m.user_id AS conv, m.role, m.created_at, c.companion_id, c.incognito "
+        "SELECT m.id, m.user_id AS conv, m.role, m.created_at, coalesce(m.speaker_id, c.companion_id) AS companion_id, c.incognito "
         "FROM chat_messages m JOIN conversations c ON c.id = m.user_id "
         "WHERE m.id = ANY($1::bigint[]) AND c.account_id = $2", ids, account)}
     if any(i not in rows for i in ids):

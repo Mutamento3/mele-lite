@@ -42,11 +42,16 @@ enum LocalEcho {
     }
 
     /// 放进 system 的那段：账本 + 腔调样本
-    static func render(_ s: LocalStore, conversation conv: String, zh: Bool, userName: String) -> String {
+    /// me = 群里读账的那个 TA（10-11 群账本：用名字写的，告诉它哪个名字是它）
+    static func render(_ s: LocalStore, conversation conv: String, zh: Bool, userName: String, me: String? = nil) -> String {
         let ds = days(s, conv).filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
-        let samples = s.conversation(conv)?["echo_samples"] as? [String] ?? []
+        let samples = me == nil ? s.conversation(conv)?["echo_samples"] as? [String] ?? [] : []
         var out: [String] = []
-        if !ds.isEmpty {
+        if let me, !ds.isEmpty {
+            out.append(zh ? "〔群账本〕群里更早的聊天，远的模糊、近的清楚（账里都写名字，「\(me)」就是你）："
+                          : "〔Group ledger〕Earlier in this group — older is hazier, recent is clearer (everyone is named; \"\(me)\" is you):")
+            out.append(ds.keys.sorted().map { "## \($0)\n\(ds[$0]!)" }.joined(separator: "\n"))
+        } else if !ds.isEmpty {
             let u = who(userName, zh)
             out.append(zh ? "〔账本〕更早的对话，远的模糊、近的清楚（账里的「我」是你，「\(u)」是对方）："
                           : "〔Ledger〕Earlier conversation — older is hazier, recent is clearer (\"I\" is you, \"\(u)\" is them):")
@@ -69,8 +74,16 @@ enum LocalEcho {
     nonisolated(unsafe) private static var busy: Set<String> = []
 
     /// 一轮聊完调：上一轮喂的量到线了就在后台卷（同一个窗口不会同时卷两次）
+    /// 卷账本用谁的设定和模型：私聊 = 窗口的 TA；群 = 最近说过话的那个（10-11）
+    static func ledgerCompanion(_ host: LocalHost, _ conv: String) -> [String: Any]? {
+        if let c = host.companion(ofConversation: conv) { return c }
+        guard let g = LocalGroups.group(host.store, conv) else { return nil }
+        if let last = g["last_speaker"] as? String, let c = host.store.companion(last) { return c }
+        return LocalGroups.members(host.store, conv).first
+    }
+
     static func maybeRoll(_ host: LocalHost, conversation conv: String) {
-        guard let c = host.store.conversation(conv), let comp = host.companion(ofConversation: conv) else { return }
+        guard let c = host.store.conversation(conv), let comp = ledgerCompanion(host, conv) else { return }
         let settings = comp["settings"] as? [String: Any] ?? [:]
         let tokens = ((c["gauge"] as? [String: Any])?["tokens"] as? Int) ?? 0
         guard tokens >= highWater(settings) else { return }
@@ -81,18 +94,27 @@ enum LocalEcho {
         }
     }
 
-    struct Msg { let id: Int; let role: String; let text: String; let at: Date }
+    struct Msg {
+        let id: Int; let role: String; let text: String; let at: Date
+        /// 群里这句是谁说的（名字）；私聊 nil = 按 role 写「我」/ 对方
+        var who: String? = nil
+    }
 
     static func roll(_ host: LocalHost, conversation conv: String) async {
         let s = host.store
-        guard let comp = host.companion(ofConversation: conv) else { return }
+        guard let comp = ledgerCompanion(host, conv) else { return }
         let settings = comp["settings"] as? [String: Any] ?? [:]
         let zh = (settings["lang"] as? String ?? "zh") == "zh"
         let upto = rolledUpto(s, conv)
+        // 群（10-11）：账用名字写（第三人称），群里每个 TA 都读这一本
+        let group = LocalGroups.group(s, conv)
+        let groupUser = LocalBrain.userLabel(settings, zh: zh)
         let msgs = s.messages(conv).compactMap { m -> Msg? in
             guard let id = m["id"] as? Int, id > upto else { return nil }
-            return Msg(id: id, role: (m["role"] as? String) == "assistant" ? "assistant" : "user",
-                       text: m["text"] as? String ?? "", at: LocalStore.date(m["at"]))
+            let isAI = (m["role"] as? String) == "assistant"
+            return Msg(id: id, role: isAI ? "assistant" : "user",
+                       text: m["text"] as? String ?? "", at: LocalStore.date(m["at"]),
+                       who: group == nil ? nil : (isAI ? (m["speaker_name"] as? String ?? "TA") : groupUser))
         }
         let (rolled, _) = plan(msgs)
         guard !rolled.isEmpty else { return }
@@ -108,7 +130,8 @@ enum LocalEcho {
         for (d, chunks) in transcripts(rolled, tz: tz, zh: zh, userName: userName).sorted(by: { $0.key < $1.key }) {
             if age(d, today) >= maxDays { continue }
             for t in chunks {
-                guard let entry = await writeEntry(legs, transcript: t, day: d, existing: ds[d] ?? "", name: name, zh: zh, userName: userName) else {
+                guard let entry = await writeEntry(legs, transcript: t, day: d, existing: ds[d] ?? "", name: name, zh: zh, userName: userName,
+                                                   group: group.map { LocalGroups.displayName(s, $0) }) else {
                     fail(s, conv)
                     return
                 }
@@ -117,7 +140,8 @@ enum LocalEcho {
         }
         // ② 压旧天：超了天龄配额 ×1.3 的天单独压；压不动先留着
         for (d, a, quota) in overQuota(ds, today: today, zh: zh) {
-            if let short = await ageDay(legs, text: ds[d] ?? "", day: d, age: a, quota: quota, name: name, zh: zh, userName: userName) {
+            if let short = await ageDay(legs, text: ds[d] ?? "", day: d, age: a, quota: quota, name: name, zh: zh, userName: userName,
+                                        group: group.map { LocalGroups.displayName(s, $0) }) {
                 ds[d] = short
             }
         }
@@ -126,7 +150,7 @@ enum LocalEcho {
         guard var c = s.conversation(conv) else { return }
         c["echo"] = ds
         c["rolled_upto"] = rolled.last!.id
-        c["echo_samples"] = rolled.filter { $0.role == "assistant" }.map { String($0.text.prefix(sampleChars)) }.suffix(voiceSamples).map { $0 }
+        c["echo_samples"] = group != nil ? [] : rolled.filter { $0.role == "assistant" }.map { String($0.text.prefix(sampleChars)) }.suffix(voiceSamples).map { $0 }
         c["echo_fails"] = 0
         c["echo_at"] = LocalStore.iso(Date())
         c["gauge"] = nil                       // 卷完了，上一轮的水位不作数；下一轮重新量
@@ -215,7 +239,7 @@ enum LocalEcho {
         let hm = DateFormatter(); hm.dateFormat = "HH:mm"; hm.timeZone = tz
         var lines: [String: [String]] = [:]
         for m in msgs {
-            let line = "[\(hm.string(from: m.at))] \(speaker(m.role, zh: zh, userName: userName))\(sep)\(m.text)"
+            let line = "[\(hm.string(from: m.at))] \(m.who ?? speaker(m.role, zh: zh, userName: userName))\(sep)\(m.text)"
             lines[dayKey(m.at, tz), default: []].append(String(line.prefix(chunkChars)))
         }
         return lines.mapValues { ls in
@@ -473,15 +497,115 @@ enum LocalEcho {
     }
 
     static func writeEntry(_ legs: [(ProviderConfig, String)], transcript: String, day: String, existing: String,
-                           name: String, zh: Bool, userName: String) async -> String? {
-        let (prompt, limit) = writePrompt(transcript, day: day, existing: existing, name: name, zh: zh, userName: userName)
+                           name: String, zh: Bool, userName: String, group: String? = nil) async -> String? {
+        let (prompt, limit) = group.map { groupWritePrompt(transcript, day: day, existing: existing, group: $0, zh: zh) }
+            ?? writePrompt(transcript, day: day, existing: existing, name: name, zh: zh, userName: userName)
+        // 群账本是用名字写的：不查「名字出现太多次」那道人称闸
         return await short(legs, prompt: prompt, source: "\(transcript)\n\(existing)", maxLen: Int(Double(limit) * 1.5),
-                           name: name, zh: zh, userName: userName)
+                           name: group == nil ? name : "", zh: zh, userName: userName)
+    }
+
+    /// 群账本（10-11）：好几个人说话，没法用谁的「我」写——每个人都写名字，群里每个 TA 都读这一本
+    static func groupWritePrompt(_ transcript: String, day: String, existing: String, group: String, zh: Bool) -> (String, Int) {
+        let limit = entryBudget(transcript.count, zh: zh)
+        let last = String(existing.suffix(120))
+        if zh {
+            let tail = existing.trimmingCharacters(in: .whitespaces).isEmpty ? "" : "- 这一天已有的账最后一句是：「\(last)」——接着往下写，别重复。\n"
+            return ("""
+            下面是群「\(group)」里的一段聊天，全部发生在 \(dayLabel(day, zh: true))。把它写成一段 \(limit) 字以内的账，接在这一天已有的账后面。
+
+            【人称】
+            - 每个人都写名字，不用「我」「你」。说话人只看每行开头的名字，不按语气改判。
+
+            【写什么】
+            - 事实脉络：发生了什么、谁说了哪句关键的话、谁跟谁接了话或拌了嘴、做了什么决定或约定、情绪在哪里转弯。
+            - 不抄原句，不写抒情和描写。只写聊天里真有的事，不续写，不补没有的人名、数字、计划。
+            \(tail)
+            【输出】一段中文正文，\(limit) 字以内，不带日期、不分行、不加前言。
+
+            ⟪聊天开始⟫
+            \(transcript)
+            ⟪聊天结束⟫
+
+            再说一遍：\(limit) 字以内。
+            """, limit)
+        }
+        let tail = existing.trimmingCharacters(in: .whitespaces).isEmpty ? "" : "- The day's ledger so far ends with: \"\(last)\" — carry on from there, don't repeat it.\n"
+        return ("""
+        Below is part of a chat in the group "\(group)", all on \(dayLabel(day, zh: false)). Write it up as one ledger paragraph of at most \(limit) characters, to be appended to that day's existing ledger.
+
+        [Names]
+        - Name everyone; never use "I" or "you". Who said what is decided only by the name at the start of each line, never by tone.
+
+        [What to write]
+        - The factual thread: what happened, the key lines and who said them, who replied to or teased whom, decisions made, where the mood turned.
+        - Don't quote lines verbatim; no lyrical description. Only what is in the chat — don't continue it or add names, numbers or plans that aren't there.
+        \(tail)
+        [Output] One paragraph of plain English, at most \(limit) characters, no date, no line breaks, no preamble.
+
+        ⟪chat start⟫
+        \(transcript)
+        ⟪chat end⟫
+
+        Once more: at most \(limit) characters.
+        """, limit)
+    }
+
+    static func groupAgePrompt(_ text: String, day: String, age a: Int, quota: Int, group: String, zh: Bool) -> String {
+        let lo = Int((Double(quota) * ageLo).rounded())
+        if zh {
+            let howOld = a < 3 ? ["今天", "昨天", "前天"][a] : "\(a) 天前"
+            let how = a >= 3 ? "- 大幅删除细节、原因和过程，只留一两句：这一天群里最要紧的事。"
+                             : "- 删除过程和细节描写，保留原因、结果和情绪转折。"
+            return """
+            下面是群「\(group)」账本里 \(dayLabel(day, zh: true))（\(howOld)）这一天的记录，账里每个人都写名字。
+
+            【核心指令：对这段记录执行二次压缩】
+            ⚠️ 注意：这段记录不是最终成品，必须进行二次裁剪与重构，不能原样交回！
+            \(how)
+            - 写成一段 \(lo)～\(quota) 字的新概要，替换掉原来的。
+            - 照原记录写名字，不用「我」「你」；谁说的、谁做的照原记录，不改判。只写原记录里真有的事。
+
+            【输出】一段中文正文，\(lo)～\(quota) 字，不带日期、不分行、不加前言。
+
+            ⟪记录开始⟫
+            \(text)
+            ⟪记录结束⟫
+
+            再说一遍：\(lo)～\(quota) 字。
+            """
+        }
+        let howOld = a < 3 ? ["today", "yesterday", "the day before yesterday"][a] : "\(a) days ago"
+        let how = a >= 3 ? "- Cut details, reasons and process hard; keep one or two sentences: the most important thing in the group that day."
+                         : "- Cut the process and descriptive detail; keep causes, outcomes and turns of mood."
+        return """
+        Below is the entry for \(dayLabel(day, zh: false)) (\(howOld)) from the ledger of the group "\(group)". Everyone in it is named.
+
+        [Core instruction: compress this entry a second time]
+        ⚠️ Note: this entry is NOT a finished product. It must be cut down and rewritten — do not hand it back as it is!
+        \(how)
+        - Write one new summary paragraph of \(lo)–\(quota) characters to replace the old one.
+        - Keep everyone named, never "I" or "you"; keep who said and did what exactly as recorded. Only what is in the entry.
+
+        [Output] One paragraph of plain English, \(lo)–\(quota) characters, no date, no line breaks, no preamble.
+
+        ⟪entry start⟫
+        \(text)
+        ⟪entry end⟫
+
+        Once more: \(lo)–\(quota) characters.
+        """
     }
 
     /// 压旧天：DeepSeek 一大段压不动、小段压得动（09-27 考试），长的先按句切 600 字小块各压
     static func ageDay(_ legs: [(ProviderConfig, String)], text: String, day: String, age a: Int, quota q: Int,
-                       name: String, zh: Bool, userName: String) async -> String? {
+                       name: String, zh: Bool, userName: String, group: String? = nil) async -> String? {
+        // 群账本（10-11）：用名字写的，不查人称闸
+        let name = group == nil ? name : ""
+        func agePrompt(_ part: String, day: String, age: Int, quota: Int, name: String, zh: Bool, userName: String) -> String {
+            group.map { groupAgePrompt(part, day: day, age: age, quota: quota, group: $0, zh: zh) }
+                ?? Self.agePrompt(part, day: day, age: age, quota: quota, name: name, zh: zh, userName: userName)
+        }
         let piece: Int? = legs.first.map { $0.0.model.lowercased().contains("deepseek") } == true ? 600 : nil
         var result: String?
         if let size = piece, text.count > size {

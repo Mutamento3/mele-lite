@@ -95,6 +95,8 @@ final class LocalMemory: @unchecked Sendable {
         var resolved: Bool
         var createdAt: Date
         var rewrittenAt: Date?
+        /// 哪些 TA 记得这件事（10-11 群聊：共用一本时，同一件事并成一条，标「阿橘和小满都记得」）
+        var by: [String] = []
 
         init?(_ d: [String: Any]) {
             guard let id = d["id"] as? Int, let content = d["content"] as? String else { return nil }
@@ -109,6 +111,7 @@ final class LocalMemory: @unchecked Sendable {
             resolved = d["resolved"] as? Bool ?? false
             createdAt = LocalStore.date(d["created_at"])
             rewrittenAt = (d["rewritten_at"] as? String).map { _ in LocalStore.date(d["rewritten_at"]) }
+            by = d["by"] as? [String] ?? []
         }
 
         init(id: Int, kind: String = "memory", title: String = "", content: String, tags: [String] = [],
@@ -124,6 +127,7 @@ final class LocalMemory: @unchecked Sendable {
                                     "importance": importance, "valence": valence, "arousal": arousal,
                                     "resolved": resolved, "created_at": LocalStore.iso(createdAt)]
             if let r = rewrittenAt { d["rewritten_at"] = LocalStore.iso(r) }
+            if !by.isEmpty { d["by"] = by }
             return d
         }
 
@@ -329,8 +333,9 @@ final class LocalMemory: @unchecked Sendable {
     var all: [Item] { lock.withLock { items } }
 
     /// 跟已有记忆比词集 Jaccard：≥0.75 合并，0.45~0.75 照存但提醒模型可能重了
+    /// by = 哪个 TA 在记（10-11）：并进别的 TA 记过的那条时不改人家的说法，只把自己添进「也记得」
     func remember(content: String, title: String = "", tags: [String] = [], importance: Int = 5,
-                  valence: Double = 0, arousal: Double = 0) -> MCPCallResult {
+                  valence: Double = 0, arousal: Double = 0, by: String = "") -> MCPCallResult {
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return err("content is empty") }
         return lock.withLock {
@@ -344,8 +349,16 @@ final class LocalMemory: @unchecked Sendable {
                 if j > (best?.j ?? 0) { best = (m, j) }
             }
             let imp = max(1, min(10, importance))
-            if let b = best, b.j >= 0.75 {        // 同一件事：换上新的说法
+            if let b = best, b.j >= 0.75 {        // 同一件事：换上新的说法（别的 TA 记的就不改说法，只添上自己）
                 var m = b.item
+                let someoneElse = !by.isEmpty && !m.by.isEmpty && !m.by.contains(by)
+                if !by.isEmpty && !m.by.contains(by) { m.by.append(by) }
+                if someoneElse {
+                    m.tags = Array(Set(m.tags + tags.map { String($0.prefix(20)) }).prefix(8)).sorted()
+                    m.importance = max(m.importance, imp)
+                    replace(m)
+                    return ok("Merged into #\(m.id) (already remembered).\n\(Self.line(m))", ["merged": true, "memory": Self.data(m)])
+                }
                 m.content = body
                 if !title.isEmpty { m.title = String(title.prefix(60)) }
                 m.tags = Array(Set(m.tags + tags.map { String($0.prefix(20)) }).prefix(8)).sorted()
@@ -358,7 +371,9 @@ final class LocalMemory: @unchecked Sendable {
             let m = Item(id: store.nextID("memory_item"), title: String(title.prefix(60)), content: body,
                          tags: Array(tags.map { String($0.prefix(20)) }.prefix(8)), importance: imp,
                          valence: max(-1, min(1, valence)), arousal: max(0, min(1, arousal)))
-            items.append(m)
+            var made = m
+            if !by.isEmpty { made.by = [by] }
+            items.append(made)
             termCache[m.id] = nil
             save()
             embed(m)
@@ -366,7 +381,7 @@ final class LocalMemory: @unchecked Sendable {
             if let b = best, b.j >= 0.45 {
                 text += "\n跟 #\(b.item.id) 很像：\(snippet(b.item.content, 60))。如果是同一件事，update #\(b.item.id) 再 forget 这条。"
             }
-            return ok(text, ["merged": false, "memory": Self.data(m)])
+            return ok(text, ["merged": false, "memory": Self.data(made)])
         }
     }
 
@@ -635,7 +650,7 @@ final class LocalMemory: @unchecked Sendable {
         ]
     }
 
-    func call(_ name: String, argumentsJSON: String) -> MCPCallResult {
+    func call(_ name: String, argumentsJSON: String, by: String = "") -> MCPCallResult {
         let a = (try? JSONSerialization.jsonObject(with: Data(argumentsJSON.utf8)) as? [String: Any]) ?? [:]
         switch name {
         case "wake": return wake()
@@ -644,7 +659,7 @@ final class LocalMemory: @unchecked Sendable {
             return remember(content: a["content"] as? String ?? "", title: a["title"] as? String ?? "",
                             tags: a["tags"] as? [String] ?? [], importance: a["importance"] as? Int ?? 5,
                             valence: (a["valence"] as? NSNumber)?.doubleValue ?? 0,
-                            arousal: (a["arousal"] as? NSNumber)?.doubleValue ?? 0)
+                            arousal: (a["arousal"] as? NSNumber)?.doubleValue ?? 0, by: by)
         case "search": return search(query: a["query"] as? String ?? "", limit: a["limit"] as? Int ?? 10)
         case "list_memories":
             return listMemories(kind: a["kind"] as? String, order: a["order"] as? String ?? "new",

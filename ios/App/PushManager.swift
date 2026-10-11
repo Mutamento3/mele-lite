@@ -52,6 +52,12 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
             await MainActor.run { NotificationCenter.default.post(name: .lumiOpenFocus, object: nil) }
             return
         }
+        if info["group"] as? Bool == true, let conv = (info["conversation"] as? String).flatMap(UUID.init) {   // 群（10-11）
+            await MainActor.run {
+                NotificationCenter.default.post(name: Self.openFromPush, object: nil, userInfo: ["conversation": conv, "group": true])
+            }
+            return
+        }
         guard let conv = (info["conversation"] as? String).flatMap(UUID.init),
               let comp = (info["companion"] as? String).flatMap(UUID.init) else { return }
         await MainActor.run {

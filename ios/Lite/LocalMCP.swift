@@ -10,6 +10,8 @@ final class LocalMCP: @unchecked Sendable {
         var id: String; var name: String; var url: String; var slug: String
         /// 本地记忆库用哪本（10-11 分仓）：共用 / 某个 TA 自己那本；远程服务用不到
         var scope = LocalMemory.sharedScope
+        /// 谁在用（10-11 群聊）：记忆记下是哪个 TA 记的
+        var by = ""
         var local: LocalMemory { LocalMemory.vault(scope) }
     }
     struct Toolbox { var specs: [ToolSpec] = []; var route: [String: (Server, String)] = [:]; var memory: Server? }
@@ -91,7 +93,7 @@ final class LocalMCP: @unchecked Sendable {
     func memoryServer(_ s: LocalStore, companion: [String: Any]) -> Server? {
         let st = companion["settings"] as? [String: Any] ?? [:]
         guard let mid = st["memory_server"] as? String, var sv = servers(s).first(where: { $0.id == mid }) else { return nil }
-        if sv.id == LocalMemory.serverID { sv.scope = LocalMemory.scope(of: companion) }
+        if sv.id == LocalMemory.serverID { sv.scope = LocalMemory.scope(of: companion); sv.by = companion["id"] as? String ?? "" }
         return sv
     }
 
@@ -102,7 +104,10 @@ final class LocalMCP: @unchecked Sendable {
         let memoryID = st["memory_server"] as? String
         var box = Toolbox()
         for var sv in servers(host.store) where on.contains(sv.id) || sv.id == memoryID {
-            if sv.id == LocalMemory.serverID { sv.scope = LocalMemory.scope(of: companion) }   // 分仓：TA 用自己那本
+            if sv.id == LocalMemory.serverID {                       // 分仓：TA 用自己那本；记下是谁记的
+                sv.scope = LocalMemory.scope(of: companion)
+                sv.by = companion["id"] as? String ?? ""
+            }
             guard let tools = try? await tools(sv) else { continue }
             let memory = sv.id == LocalMemory.serverID || isMemory(tools)
             if memory && (incognito || sv.id != memoryID) { continue }   // 记忆库只给绑定的那个 TA；无痕不给
@@ -125,7 +130,7 @@ final class LocalMCP: @unchecked Sendable {
     func run(_ call: ToolCall, via: (Server, String), zh: Bool) async -> LocalTools.Outcome {
         let (sv, tool) = via
         if sv.id == LocalMemory.serverID {
-            let r = sv.local.call(tool, argumentsJSON: call.argumentsJSON)
+            let r = sv.local.call(tool, argumentsJSON: call.argumentsJSON, by: sv.by)
             if r.isError { return .init(result: "没成：\(r.text)", card: nil) }
             return .init(result: r.text.isEmpty ? "好了" : r.text,
                          card: ["kind": "memory", "text": "\(zh ? "用了" : "Used") \(sv.name)：\(tool)"])

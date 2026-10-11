@@ -178,10 +178,33 @@ struct MessageDTO: Decodable, Identifiable {
     var divider: String?
     /// 回复后的心声（10-11）：这一轮最后一张小卡片；没开 / 老消息是 nil 或空
     var innerVoice: String?
+    /// 群里是哪个 TA 说的（10-11）；私聊是 nil。名字一起带着，TA 删了也认得
+    var speaker: UUID?
+    var speakerName: String?
     enum CodingKeys: String, CodingKey {
-        case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider
+        case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider, speaker
         case thinkingMs = "thinking_ms"
         case innerVoice = "inner_voice"
+        case speakerName = "speaker_name"
+    }
+}
+
+/// 群（10-11）：Lite 小管家的 groups/ 接口
+struct GroupDTO: Decodable, Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    var displayName: String
+    var members: [UUID]
+    var formerMembers: [UUID]
+    var avatarVer: Int
+    var maxRounds: Int
+    var newMemberSeesHistory: Bool
+    var lastAt: Date
+    var preview: String
+    enum CodingKeys: String, CodingKey {
+        case id, name, members, preview
+        case displayName = "display_name", formerMembers = "former_members", avatarVer = "avatar_ver"
+        case maxRounds = "max_rounds", newMemberSeesHistory = "new_member_sees_history", lastAt = "last_at"
     }
 }
 
@@ -203,7 +226,9 @@ struct ChatEvent: Decodable {
     var stickerID: Int?
     var voice: VoiceRef?
     var ms: Int?                 // thinking：这一轮想了多久（10-05）
-    enum CodingKeys: String, CodingKey { case type, text, kind, message, data, voice, ms; case isPrivate = "private" }
+    var speaker: UUID?           // 群里是谁（10-11）
+    var speakerName: String?
+    enum CodingKeys: String, CodingKey { case type, text, kind, message, data, voice, ms, speaker; case isPrivate = "private"; case speakerName = "speaker_name" }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
@@ -215,6 +240,8 @@ struct ChatEvent: Decodable {
         stickerID = kind == "sticker" ? (try? c.decodeIfPresent(StickerRef.self, forKey: .data))?.stickerID : nil
         voice = try? c.decodeIfPresent(VoiceRef.self, forKey: .voice)
         ms = try? c.decodeIfPresent(Int.self, forKey: .ms)
+        speaker = try? c.decodeIfPresent(UUID.self, forKey: .speaker)
+        speakerName = try? c.decodeIfPresent(String.self, forKey: .speakerName)
         if kind == "peek" { kind = PeekState.kind(try? c.decodeIfPresent(PeekState.self, forKey: .data)) }
     }
 }
