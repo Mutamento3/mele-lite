@@ -21,9 +21,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - run: echo "BUILD=$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"   # 版本戳：/version 和 mele-host status 报它
       - uses: docker/build-push-action@v6
         with:
           context: server
+          build-args: BUILD=${{ env.BUILD }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

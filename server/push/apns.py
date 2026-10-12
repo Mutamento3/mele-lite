@@ -118,6 +118,9 @@ async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 
         sent_any = False
         for i, one in enumerate(bodies):
             body = json.dumps(one, ensure_ascii=False).encode()
+            # 同一条气泡每次都带同一个 collapse id（10-13 内测「改了好多版还是重复」）：不管 Host 为什么又推了一遍
+            # ——没更新、重启到一半、回话没等到——苹果和手机都认它是同一条，锁屏上只留一条
+            collapse = f"{r['id']}-{i}"
             if i:
                 await asyncio.sleep(GAP)          # 隔一小下，锁屏上按顺序叠
             for token in list(devices):
@@ -127,10 +130,10 @@ async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 
                     url, h = f"{relay_url.rstrip('/')}/push", {"authorization": f"Bearer {d['relay_secret']}",
                                                                 "content-type": "application/json"}
                     b = json.dumps({"relay_id": token[len("relay:"):], "sealed": seal(d["push_key"], one),
-                                    "sound": "sound" in aps,
+                                    "sound": "sound" in aps, "collapse": collapse,
                                     "urgent": aps.get("interruption-level") == "time-sensitive"}).encode()
                 else:
-                    url, h, b = f"{cfg.host}/3/device/{token}", headers, body
+                    url, h, b = f"{cfg.host}/3/device/{token}", {**headers, "apns-collapse-id": collapse}, body
                 try:
                     status, reason = await transport(url, h, b)
                 except Exception as e:              # noqa: BLE001

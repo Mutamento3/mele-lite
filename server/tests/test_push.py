@@ -287,3 +287,24 @@ async def test_cannot_connect_is_retried(pool):
     down = False
     assert await send_pending(pool, None, flaky, relay_url="https://relay.test") == 1
     assert len(calls) == 2
+
+
+async def test_every_bubble_carries_a_collapse_id(pool):
+    """10-13 内测「改了好多版还是重复」：不管 Host 为什么又推了一遍（没更新、重启到一半、回话没等到），
+    同一条气泡带同一个 apns-collapse-id，手机上只显示一条。中转走 collapse 字段，直连走请求头。"""
+    import push.apns as A
+    A.GAP = 0
+    await _one_queued(pool, "早呀\n\n醒了没")
+    qid = await pool.fetchval("SELECT id FROM push_queue")
+    await pool.execute("INSERT INTO devices (account_id, apns_token, updated_at) SELECT account_id, 'direct-tok', now() FROM devices")
+    sent = []
+
+    async def transport(url, headers, body):
+        sent.append((url, headers, json.loads(body)))
+        return 200, ""
+    assert await send_pending(pool, cfg(), transport, relay_url="https://relay.test") == 1
+    relay = [(h, b) for u, h, b in sent if u.endswith("/push")]
+    direct = [(h, b) for u, h, b in sent if "/3/device/" in u]
+    assert [b["collapse"] for _, b in relay] == [f"{qid}-0", f"{qid}-1"]
+    assert [h["apns-collapse-id"] for h, _ in direct] == [f"{qid}-0", f"{qid}-1"]
+    assert all("apns-collapse-id" not in h for h, _ in relay)          # 中转那边自己加请求头

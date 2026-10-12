@@ -4,6 +4,7 @@
 /companions/{id}/import 收别的 AI 的官方聊天记录（10-05，brain/chat_import.py；包在手机上认好再发来）。"""
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from uuid import UUID
 
@@ -21,7 +22,9 @@ LOCK_FOR = timedelta(minutes=10)
 @router.get("/version")
 async def version(a: Api = Depends(api)):
     from .app import API_VERSION
-    return {"api": API_VERSION, "host": a.cfg.host_mode}
+    # build：镜像打的时候写进 NEWAPP_BUILD（YYYYMMDD-提交号；10-13）。App 拿它判断 Host 是不是旧的、该不该提醒 mele-host update；
+    # 本机跑、老镜像都没有 → null
+    return {"api": API_VERSION, "host": a.cfg.host_mode, "build": os.environ.get("NEWAPP_BUILD", "").strip() or None}
 
 
 @router.post("/host/pair")

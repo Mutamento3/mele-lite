@@ -12,7 +12,8 @@ case "${1:-help}" in
     if [ -n "$link" ] && command -v qrencode >/dev/null; then qrencode -t ansiutf8 "$link"; fi
     ;;
   status) docker compose ps; docker compose exec -T mele python -m api.host status ;;
-  update) docker compose pull && docker compose up -d && docker image prune -f >/dev/null ;;
+  update) docker compose pull && docker compose up -d && docker image prune -f >/dev/null
+          echo "更新好了。现在的版本："; sleep 3; docker compose exec -T mele printenv NEWAPP_BUILD || echo "（起来以后 mele-host status 能看）" ;;
   logs)   docker compose logs -f --tail 200 mele ;;
   stop)   docker compose stop ;;
   start)  docker compose up -d ;;

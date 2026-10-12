@@ -32,7 +32,7 @@ async def test_version_says_host(pool):
     async with client(make_app(pool, host_mode=True)) as c:
         r = await c.get("/version")
     assert r.status_code == 200
-    assert r.json() == {"api": API_VERSION, "host": True}
+    assert r.json() == {"api": API_VERSION, "host": True, "build": None}
 
 
 async def test_version_not_host(pool):
@@ -137,3 +137,10 @@ async def test_ensure_code_only_when_nobody_paired(pool):
     code = await host.new_code(pool, secret=SECRET, now=NOW)
     await host.pair(pool, code, secret=SECRET, now=NOW)
     assert await host_cli.ensure_code(pool, secret=SECRET) is None           # 有主人了：重启不出新码
+
+
+async def test_version_tells_the_build(pool, monkeypatch):
+    """10-13：App 要能看出 Host 是不是旧的（修了推送重复却没 mele-host update 的人看不出来）：镜像打的时候写进 NEWAPP_BUILD"""
+    monkeypatch.setenv("NEWAPP_BUILD", "20261013-abc1234")
+    async with client(make_app(pool, host_mode=True)) as c:
+        assert (await c.get("/version")).json()["build"] == "20261013-abc1234"

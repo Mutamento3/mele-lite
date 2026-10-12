@@ -69,7 +69,8 @@ async def _main(args) -> int:
     pool = await M.create_pool(dsn)
     try:
         if args.cmd == "status":
-            print(f"主人：{'已配对' if await host.owner(pool) else '还没有'}；"
+            print(f"版本：{os.environ.get('NEWAPP_BUILD', '').strip() or '（本机，没打版本）'}；"
+                  f"主人：{'已配对' if await host.owner(pool) else '还没有'}；"
                   f"没用的配对码：{'有' if await host.has_code(pool) else '没有'}")
             return 0
         code = await host.new_code(pool, secret=secret, now=datetime.now(timezone.utc))

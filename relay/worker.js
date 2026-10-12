@@ -2,7 +2,8 @@
 //
 // POST /register {token, sandbox}  手机登记自己的苹果设备号 → {relay_id, relay_secret}
 //                                   （存 KV：relay_id → 设备号 + 口令的哈希；口令原文只给手机，手机交给自己的 Host）
-// POST /push {relay_id, sealed, sound, urgent}  Host 带着口令来推 → 照原样转给苹果
+// POST /push {relay_id, sealed, sound, urgent, collapse}  Host 带着口令来推 → 照原样转给苹果
+//      collapse（10-13，可选）：同一条气泡每次都带同一个，转成 apns-collapse-id——Host 不小心又推一遍，手机上还是一条。
 //      sealed 是 Host 用手机给的钥匙加密的推送内容，这里解不开；手机的通知扩展解开再显示。
 //      苹果说这个设备没了（410）→ 删掉登记，回 410，Host 那边也删。
 //
@@ -55,14 +56,16 @@ async function push(req, env) {
   if (body.sound) aps.sound = "default";
   if (body.urgent) aps["interruption-level"] = "time-sensitive";
   const host = dev.sandbox ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
+  const headers = {
+    authorization: `bearer ${await apnsJwt(env)}`,
+    "apns-topic": env.TOPIC,
+    "apns-push-type": "alert",
+    "apns-priority": "10",
+  };
+  if (typeof body.collapse === "string" && /^[\w.-]{1,64}$/.test(body.collapse)) headers["apns-collapse-id"] = body.collapse;
   const res = await fetch(`${host}/3/device/${dev.token}`, {
     method: "POST",
-    headers: {
-      authorization: `bearer ${await apnsJwt(env)}`,
-      "apns-topic": env.TOPIC,
-      "apns-push-type": "alert",
-      "apns-priority": "10",
-    },
+    headers,
     body: JSON.stringify({ aps, sealed: body.sealed }),
   });
   if (res.status === 200) return json({ ok: true });

@@ -92,6 +92,7 @@ struct MainTabView: View {
             await model.greetIfPending()
             if !Lite.local { await PushDelegate.requestAndRegister() }   // 手机里的小管家推不了；连着 Mele Host 就要（10-04）
             await model.reportDevice()
+            await HostLink.refreshBuild()                   // Host 是不是旧的（10-13）：Me 的 Host 卡上提醒 mele-host update
         }
         .onReceive(NotificationCenter.default.publisher(for: .lumiDeviceToken)) { _ in
             Task { await model.reportDevice() }

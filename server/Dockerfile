@@ -23,6 +23,10 @@ COPY patrol ./patrol
 COPY push ./push
 COPY NOTICE.md ./
 
+# 版本戳（10-13）：Actions 打镜像时传 BUILD=YYYYMMDD-提交号；/version 和 mele-host status 都报它，App 据此提醒该 mele-host update
+ARG BUILD=
+ENV NEWAPP_BUILD=$BUILD
+
 VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health')"

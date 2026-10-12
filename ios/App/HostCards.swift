@@ -13,6 +13,23 @@ enum HostLink {
     private static let lastURLKey = "host.lastURL"
     private static let lastTokenKey = "hostTokenLast"
     static let tipKey = "host.tipShown"
+    /// Host 的版本戳（10-13 内测：推送重复修了三版都在 Host 上，测的人只更新过一次 Host，App 更新了也没用，还看不出来）。
+    /// 镜像打的时候写进去，样子是 YYYYMMDD-提交号；老镜像没有 → 当旧的。App 要的最低日期在这里，Host 修了要紧的事就往上调
+    static let minHostBuild = "20261013"
+    private static let buildKey = "host.build"           // "" = 问过了、Host 没报（老镜像）；nil = 还没问过
+    static var hostBuild: String? { UserDefaults.standard.string(forKey: buildKey) }
+    static var hostOutdated: Bool {
+        guard let b = hostBuild else { return false }
+        return String(b.prefix(8)) < minHostBuild
+    }
+
+    /// 连着 Host 时每次打开 App 问一次 /version，记下版本戳
+    static func refreshBuild() async {
+        guard let link = current else { return }
+        guard let (d, _) = try? await URLSession.shared.data(from: link.url.appendingPathComponent("version")),
+              let v = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        UserDefaults.standard.set(v["build"] as? String ?? "", forKey: buildKey)
+    }
 
     struct Link { let url: URL; let token: String }
 
@@ -210,6 +227,7 @@ struct HostCard: View {
     @State private var rejoining = false
     @State private var rejoinError: String?
     @State private var forgot = false          // 点了「忘掉」：重画一下
+    @State private var asked = false           // 问过 Host 版本：重画一下
 
     private func rejoin() async {
         rejoining = true; rejoinError = nil
@@ -254,6 +272,13 @@ struct HostCard: View {
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Hint(text: String(localized: "TA 在 Host 上：你关掉 App 它也会想起你、自己醒来。手机里的地图、小号、记忆库连着 Host 时先收起来，断开就回来。"))
+                if HostLink.hostOutdated {
+                    Label(String(localized: "Host 旧了：在服务器上用 root 运行 mele-host update。最近的修补（推送重复、搬记忆库）都在 Host 上，App 更新了也要 Host 跟上才生效。"),
+                          systemImage: "exclamationmark.triangle")
+                        .font(Typo.sans(Typo.Size.caption)).foregroundStyle(.orange)
+                } else if let b = HostLink.hostBuild, !b.isEmpty {
+                    Text(String(localized: "Host 版本 \(b)")).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
+                }
                 #if LITE
                 Button(moving ? HostLink.movingLabel(sent) : String(localized: "把手机里的搬过来")) { Task { await move() } }
                     .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep).disabled(moving)
@@ -294,7 +319,8 @@ struct HostCard: View {
                 .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
             }
         }
-        .id(forgot)
+        .id("\(forgot)-\(asked)")
+        .task { await HostLink.refreshBuild(); asked.toggle() }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
