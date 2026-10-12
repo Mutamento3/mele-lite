@@ -433,10 +433,11 @@ struct MomentsFog: View {
     }
 }
 
-/// 头像：你用名字首字，联系人用它的头像（圆角方，微信朋友圈那样）
+/// 头像：你用 Me 里换的那张（没换就是名字首字，10-12 内测：朋友圈换不了头像），联系人用它的头像（圆角方，微信朋友圈那样）
 struct MomentAvatar: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var theme: AppTheme
+    @EnvironmentObject private var avatars: AvatarStore
     let who: String
     var size: CGFloat = 44
 
@@ -444,6 +445,8 @@ struct MomentAvatar: View {
         let comp = model.companions.first { $0.id.uuidString.lowercased() == who }
         Group {
             if let c = comp, let img = model.avatarImages[c.id] {
+                Image(uiImage: img).resizable().scaledToFill()
+            } else if who == "user", let img = avatars.me {
                 Image(uiImage: img).resizable().scaledToFill()
             } else {
                 ZStack {
