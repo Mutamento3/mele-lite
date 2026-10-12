@@ -127,10 +127,22 @@ final class LocalMCP: @unchecked Sendable {
     }
 
     /// 跑一次外面的工具，回给模型的话 + 「做了几件事」的卡
-    func run(_ call: ToolCall, via: (Server, String), zh: Bool) async -> LocalTools.Outcome {
+    /// judge = 问模型一句（记新记忆前判断是不是跟旧的同一件事，10-12）；没给就只看字面
+    func run(_ call: ToolCall, via: (Server, String), zh: Bool, judge: ((String) async -> String?)? = nil) async -> LocalTools.Outcome {
         let (sv, tool) = via
         if sv.id == LocalMemory.serverID {
-            let r = sv.local.call(tool, argumentsJSON: call.argumentsJSON, by: sv.by)
+            var args = call.argumentsJSON
+            if tool == "remember", let judge,
+               var a = (try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any],
+               let content = a["content"] as? String {
+                let cands = sv.local.dedupeCandidates(for: content)
+                if !cands.isEmpty, let reply = await judge(MemoryDedupe.prompt(new: content, candidates: cands, zh: zh)),
+                   let id = MemoryDedupe.parse(reply, candidates: cands) {
+                    a["_merge_into"] = id
+                    if let d = try? JSONSerialization.data(withJSONObject: a), let j = String(data: d, encoding: .utf8) { args = j }
+                }
+            }
+            let r = sv.local.call(tool, argumentsJSON: args, by: sv.by)
             if r.isError { return .init(result: "没成：\(r.text)", card: nil) }
             return .init(result: r.text.isEmpty ? "好了" : r.text,
                          card: ["kind": "memory", "text": "\(zh ? "用了" : "Used") \(sv.name)：\(tool)"])

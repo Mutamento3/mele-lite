@@ -69,6 +69,7 @@ private struct SignedIn: View {
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-backupSelfTest") { LocalBackup.selfTest() }
                     if ProcessInfo.processInfo.arguments.contains("-memorySelfTest") { LocalMemorySelfTest.run() }
+                    if ProcessInfo.processInfo.arguments.contains("-dedupeSelfTest") { LocalDedupeSelfTest.run() }
                     #endif
                     #endif
                     await model.refresh()

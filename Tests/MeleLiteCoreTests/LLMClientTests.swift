@@ -165,6 +165,24 @@ private func run(_ cfg: ProviderConfig, _ reply: StubProtocol.Reply, image: Data
         #expect(gpt.body(ChatRequest(system: "s", turns: []))["thinking"] == nil)       // 别家不认这个字段
     }
 
+    @Test func deepSeekPrefixGoesToBetaWithoutTools() {      // 10-12：漏写独白时补叫，开头填 [独白]
+        let ds = OpenAIClient(config: ProviderConfig(kind: .openai, baseURL: "https://api.deepseek.com/v1", model: "deepseek-flash", thinking: false),
+                              key: "k", session: .shared)
+        let tool = ToolSpec(name: "remember", description: "d", parametersJSON: "{}")
+        var r = ChatRequest(system: "s", turns: [ChatTurn(role: .user, text: "hi")], tools: [tool])
+        #expect(ds.endpoint(for: r).absoluteString == "https://api.deepseek.com/v1/chat/completions")
+        #expect(ds.body(r)["tools"] != nil)
+        r.assistantPrefix = "[独白]\n"
+        #expect(ds.endpoint(for: r).absoluteString == "https://api.deepseek.com/beta/chat/completions")
+        let b = ds.body(r)
+        #expect(b["tools"] == nil)                                  // DeepSeek：前缀续写不能带工具
+        let last = (b["messages"] as? [[String: Any]])?.last
+        #expect(last?["role"] as? String == "assistant" && last?["content"] as? String == "[独白]\n" && last?["prefix"] as? Bool == true)
+        let gpt = OpenAIClient(config: ProviderConfig(kind: .openai, model: "gpt-5"), key: "k", session: .shared)
+        #expect(gpt.endpoint(for: r) == gpt.endpoint && gpt.body(r)["tools"] != nil)   // 别家不认：原样发
+        #expect(((gpt.body(r)["messages"] as? [[String: Any]])?.last?["role"] as? String) == "user")
+    }
+
     @Test func defaultOpenAIBase() {
         let c = OpenAIClient(config: ProviderConfig(kind: .openai, model: "gpt-5"), key: "k", session: .shared)
         #expect(c.endpoint.absoluteString == "https://api.openai.com/v1/chat/completions")

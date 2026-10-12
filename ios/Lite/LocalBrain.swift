@@ -422,9 +422,11 @@ final class LocalBrain: @unchecked Sendable {
         var pendingDeeds = ""
         // 独白一会有一会没有（10-12 内测）：历史里存的只有正文，它看自己前面几轮全没写独白，就跟着不写了。
         // 最近那一轮它写过的独白垫回去，让它看见自己一直是这么开口的（只垫一轮，省 token、缓存只动尾巴）
+        // 10-12 内测「时不时消失」：只看上一轮的话，上一轮漏了历史里就一段都没有，越漏越多——往回找最近三轮里写过的那段
         let lastMonoID: Int? = monologue
-            ? stored.last(where: { ($0["role"] as? String) == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf) })
-                .flatMap { m in ((m["thinking"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : m["id"] as? Int) }
+            ? stored.filter { ($0["role"] as? String) == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf) }
+                .suffix(3).last { !(($0["thinking"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                .flatMap { $0["id"] as? Int }
             : nil
         var history: [Message] = stored.map {
             var text = $0["text"] as? String ?? ""
@@ -603,7 +605,19 @@ final class LocalBrain: @unchecked Sendable {
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
         let cid = comp["id"] as? String ?? ""
         var gaugeNoted = false
-        var retriedEmpty = false                        // 只写了独白 / 什么都没说就停了：再叫一次（只一次，照服务器 09-27）
+        var retriedEmpty = false, retriedNoMono = false, usedTools = false
+        // 记新记忆前问一句「是不是跟旧的同一件事」（10-12）：用同一把 key，不想事、只回编号
+        let judge: (String) async -> String? = { [provider, key] prompt in
+            var p = provider
+            p.thinking = false
+            var out = ""
+            do {
+                for try await e in makeClient(p, key: key).stream(ChatRequest(system: "You compare memories and reply with a number or none.", turns: [ChatTurn(role: .user, text: prompt)], maxTokens: 20)) {
+                    if case .text(let t) = e { out += t }
+                }
+            } catch { return nil }
+            return out
+        }                        // 只写了独白 / 什么都没说就停了：再叫一次（只一次，照服务器 09-27）
         do {
             for _ in 0..<(box.specs.isEmpty ? 4 : 6) {
                 var said = "", calls: [ToolCall] = [], raw: String?
@@ -617,6 +631,7 @@ final class LocalBrain: @unchecked Sendable {
                         if let u, !gaugeNoted { gaugeNoted = true; LocalUsage.noteTurn(host.store, conversation: conv, usage: u, req: req) }
                     }
                 }
+                if let p = req.assistantPrefix, !said.isEmpty { said = p + said }      // 补叫时替它填好的开头，接回去
                 if !said.isEmpty { text += (text.isEmpty ? "" : "\n\n") + said }
                 if calls.isEmpty, group == nil, !retriedEmpty,
                    InnerVoice.split(Monologue.split(ModelNoise.strip(text)).body).body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -627,10 +642,22 @@ final class LocalBrain: @unchecked Sendable {
                                                   : "(You stopped before writing the reply. Go ahead as usual, and make sure you finish with what you want to say.)")
                     continue
                 }
+                // DeepSeek 时不时不写独白（10-12 内测）：这一轮没调工具、也没写独白，就关掉工具、开头填好 [独白] 重写一遍（只一次）。
+                // DeepSeek 的前缀续写不让带工具，所以只能漏了再补；Lite 是整段写完才发气泡，你只会多等几秒
+                if calls.isEmpty, monologue, group == nil, !retriedNoMono, !usedTools, provider.baseURL?.contains("deepseek") == true,
+                   Monologue.split(ModelNoise.strip(text)).monologue.isEmpty {
+                    retriedNoMono = true
+                    NSLog("[monologue] 没写独白，填好开头再叫一次")
+                    text = ""
+                    req.tools = []
+                    req.assistantPrefix = zh ? "[独白]\n" : "[monologue]\n"
+                    continue
+                }
                 guard !calls.isEmpty else { break }
+                usedTools = true                                // 调过工具的这一轮不补叫（前缀续写跟工具不能一起用）
                 var results: [ToolResult] = []
                 for c in calls {
-                    let out = if let via = box.route[c.name] { await host.mcp.run(c, via: via, zh: zh) }
+                    let out = if let via = box.route[c.name] { await host.mcp.run(c, via: via, zh: zh, judge: judge) }
                               else { await LocalTools.run(c, host: host, companion: cid, conversation: conv, zh: zh) }
                     results.append(ToolResult(id: c.id, name: c.name, content: out.result))
                     if c.name == "relationship", out.result.hasPrefix("改好了") { say(["type": "relationship"]) }   // 名字旁的图标换一下（照服务器，不挂卡）

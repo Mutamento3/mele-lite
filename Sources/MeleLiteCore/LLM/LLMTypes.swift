@@ -57,6 +57,8 @@ public struct ChatRequest: Equatable, Sendable {
     /// 每轮都会变的（几点、世界书命中、翻到的、它此刻在哪、TA 那边……）：发的时候贴在 TA 最新那句后面，
     /// 不放进 system——放进去的话它后面的整段历史每轮都得重算（10-04）
     public var context: String
+    /// 替它把回复的开头写好（10-12：DeepSeek 漏写独白时补叫一次，开头填 [独白]）。只有 DeepSeek 认，而且不能带工具
+    public var assistantPrefix: String?
     public init(system: String, turns: [ChatTurn], maxTokens: Int = 16000, tools: [ToolSpec] = [], context: String = "") {
         self.system = system; self.turns = turns; self.maxTokens = maxTokens; self.tools = tools; self.context = context
     }

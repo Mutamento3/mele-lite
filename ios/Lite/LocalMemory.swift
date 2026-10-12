@@ -332,10 +332,41 @@ final class LocalMemory: @unchecked Sendable {
     func find(_ id: Int) -> Item? { lock.withLock { items.first { $0.id == id } } }
     var all: [Item] { lock.withLock { items } }
 
-    /// 跟已有记忆比词集 Jaccard：≥0.75 合并，0.45~0.75 照存但提醒模型可能重了
+    /// 记之前粗筛「可能重了」的几条，交给模型判断是不是同一件事（10-12：字面和向量都分不清换了说法的同一件事
+    /// 跟「下周三考数学 / 考英语」这种不同的事，只能问模型）。字面重合 ≥0.15 的前 3 条 + 向量最近的前 2 条
+    func dedupeCandidates(for content: String) -> [MemoryDedupe.Candidate] {
+        let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return [] }
+        let lang = embedder.lang(of: body)
+        let qv = embedder.vector(body, lang: lang)
+        return lock.withLock {
+            let new = Set(Self.terms(body))
+            let pool = items.filter { $0.kind != "core" }
+            let byTerms = pool.map { m -> (Item, Double) in
+                let old = docTerms(m)
+                let u = Double(new.union(old).count)
+                return (m, u > 0 ? Double(new.intersection(old).count) / u : 0)
+            }.filter { $0.1 >= 0.15 }.sorted { $0.1 > $1.1 }.prefix(3).map(\.0)
+            var byVector: [Item] = []
+            if let qv {
+                byVector = pool.compactMap { m -> (Item, Double)? in
+                    guard let v = vectors[m.id], v.lang == lang else { return nil }
+                    return (m, zip(qv, v.v).map(*).reduce(0, +))
+                }.sorted { $0.1 > $1.1 }.prefix(2).map(\.0)
+            }
+            var seen = Set<Int>(), out: [MemoryDedupe.Candidate] = []
+            for m in byTerms + byVector where seen.insert(m.id).inserted {
+                out.append(.init(id: m.id, content: m.content))
+            }
+            return out
+        }
+    }
+
+    /// 跟已有记忆比词集 Jaccard：≥0.75 合并，0.45~0.75 照存但提醒模型可能重了。
+    /// mergeInto = 模型判断过是同一件事的那条（10-12）：直接并进去
     /// by = 哪个 TA 在记（10-11）：并进别的 TA 记过的那条时不改人家的说法，只把自己添进「也记得」
     func remember(content: String, title: String = "", tags: [String] = [], importance: Int = 5,
-                  valence: Double = 0, arousal: Double = 0, by: String = "") -> MCPCallResult {
+                  valence: Double = 0, arousal: Double = 0, by: String = "", mergeInto: Int? = nil) -> MCPCallResult {
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return err("content is empty") }
         return lock.withLock {
@@ -349,6 +380,7 @@ final class LocalMemory: @unchecked Sendable {
                 if j > (best?.j ?? 0) { best = (m, j) }
             }
             let imp = max(1, min(10, importance))
+            if let id = mergeInto, let m = items.first(where: { $0.id == id && $0.kind != "core" }) { best = (m, 1) }
             if let b = best, b.j >= 0.75 {        // 同一件事：换上新的说法（别的 TA 记的就不改说法，只添上自己）
                 var m = b.item
                 let someoneElse = !by.isEmpty && !m.by.isEmpty && !m.by.contains(by)
@@ -659,7 +691,8 @@ final class LocalMemory: @unchecked Sendable {
             return remember(content: a["content"] as? String ?? "", title: a["title"] as? String ?? "",
                             tags: a["tags"] as? [String] ?? [], importance: a["importance"] as? Int ?? 5,
                             valence: (a["valence"] as? NSNumber)?.doubleValue ?? 0,
-                            arousal: (a["arousal"] as? NSNumber)?.doubleValue ?? 0, by: by)
+                            arousal: (a["arousal"] as? NSNumber)?.doubleValue ?? 0, by: by,
+                            mergeInto: a["_merge_into"] as? Int)
         case "search": return search(query: a["query"] as? String ?? "", limit: a["limit"] as? Int ?? 10)
         case "list_memories":
             return listMemories(kind: a["kind"] as? String, order: a["order"] as? String ?? "new",
@@ -878,6 +911,41 @@ private final class Embedder: @unchecked Sendable {
             guard norm > 0 else { return nil }
             return m.map { $0 / norm }
         }
+    }
+}
+#endif
+
+#if LITE
+/// 合并自测（10-12，-dedupeSelfTest）：粗筛能不能把换了说法的旧记忆捞进候选、mergeInto 能不能并进去
+enum LocalDedupeSelfTest {
+    static func run() {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("dedupe-\(Int(Date().timeIntervalSince1970))")
+        let store = LocalStore(root: tmp)
+        store.write("profile.json", ["name": "小满"])
+        store.write("companions.json", [["id": "t", "persona": ["name": "Lumi"], "settings": [String: Any]()]])
+        let lib = LocalMemory(store: store)
+        var fails: [String] = []
+        let seed = ["小满下周三有数学考试，她有点紧张", "小满喜欢喝冰美式，不加糖", "小满的猫叫豆豆，是一只橘猫", "小满今天和妈妈吵架了，心情很差"]
+        var ids: [Int] = []
+        for s in seed {
+            let r = lib.remember(content: s)
+            if let m = r.structured?["memory"] as? [String: Any], let id = m["id"] as? Int { ids.append(id) }
+        }
+        let same = ["小满有点紧张，因为下周三要考数学", "小满爱喝不加糖的冰美式", "豆豆是小满养的橘猫", "小满跟妈妈吵了一架，今天心情不好"]
+        for (i, s) in same.enumerated() {
+            let c = lib.dedupeCandidates(for: s).map(\.id)
+            if !c.contains(ids[i]) { fails.append("候选里没捞到 #\(ids[i])：\(s) → \(c)") }
+        }
+        let before = lib.all.count
+        let r = lib.remember(content: same[0], mergeInto: ids[0])
+        if (r.structured?["merged"] as? Bool) != true || lib.all.count != before { fails.append("mergeInto 没并进去") }
+        if lib.find(ids[0])?.content != same[0] { fails.append("并进去以后说法没换成新的") }
+        let r2 = lib.remember(content: "小满下周三有英语考试")
+        if (r2.structured?["merged"] as? Bool) == true { fails.append("不同的事被字面并了") }
+        let r3 = lib.remember(content: "随便", mergeInto: 99_999)
+        if (r3.structured?["merged"] as? Bool) == true { fails.append("不存在的编号也并了") }
+        NSLog(fails.isEmpty ? "[dedupe-selftest] PASS" : "[dedupe-selftest] FAILED: \(fails.joined(separator: "；"))")
+        try? FileManager.default.removeItem(at: tmp)
     }
 }
 #endif

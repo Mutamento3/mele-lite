@@ -13,6 +13,13 @@ struct OpenAIClient: LLMClient {
         return URL(string: base + "/chat/completions")!
     }
 
+    /// DeepSeek 的前缀续写在 /beta 下面（https://api.deepseek.com/beta/chat/completions）
+    static func supportsPrefix(_ url: URL) -> Bool { url.host?.contains("deepseek") == true }
+    func endpoint(for r: ChatRequest) -> URL {
+        guard r.assistantPrefix != nil, Self.supportsPrefix(endpoint), let host = endpoint.host else { return endpoint }
+        return URL(string: "https://\(host)/beta/chat/completions")!
+    }
+
     func body(_ r: ChatRequest) -> [String: Any] {
         // 这几家的缓存是自动的（前缀一样就命中）：每轮变的 context 贴在 TA 最新那句后面，前面才稳
         var msgs: [[String: Any]] = [["role": "system", "content": r.contextIndex == nil && !r.context.isEmpty ? r.system + "\n\n" + r.context : r.system]]
@@ -43,20 +50,21 @@ struct OpenAIClient: LLMClient {
                 msgs.append(["role": t.role.rawValue, "content": t.text])
             }
         }
+        if let p = r.assistantPrefix, Self.supportsPrefix(endpoint) { msgs.append(["role": "assistant", "content": p, "prefix": true]) }
         var b: [String: Any] = ["model": config.model, "messages": msgs, "stream": true, "max_tokens": r.maxTokens,
                                 "stream_options": ["include_usage": true]]      // 最后一截带用量（用量页 / 水位）
         // DeepSeek 不说就默认想（10-05 真 key：手写独白时它还是交一大段英文分析腔、把独白顶掉）。服务器 openai_adapter 也这么带
         if endpoint.host?.contains("deepseek") == true {
             b["thinking"] = ["type": config.thinking ? "enabled" : "disabled"]
         }
-        if !r.tools.isEmpty {
+        if !r.tools.isEmpty, !(r.assistantPrefix != nil && Self.supportsPrefix(endpoint)) {      // 前缀续写不能带工具
             b["tools"] = r.tools.map { ["type": "function", "function": ["name": $0.name, "description": $0.description, "parameters": $0.parameters]] }
         }
         return b
     }
 
     func stream(_ r: ChatRequest) -> AsyncThrowingStream<StreamEvent, Error> {
-        var req = URLRequest(url: endpoint)
+        var req = URLRequest(url: endpoint(for: r))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
