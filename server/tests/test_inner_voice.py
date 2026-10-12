@@ -18,5 +18,12 @@ def test_rules_hook_context():
     own = IV.rules(Settings(inner_voice_style="只写一句。"))
     assert "只写一句。" in own and "口是心非" not in own
     assert IV.hook(s).startswith("〔心声〕")
-    assert IV.context_line("高兴", "zh") == "（当时心里：高兴）"
-    assert IV.context_line("glad", "en") == "(What I felt then: glad)"
+    assert IV.context_line("高兴", "zh") == "[心声]\n高兴\n[/心声]"
+    assert IV.context_line("glad", "en") == "[inner voice]\nglad\n[/inner voice]"
+
+
+def test_old_untagged_shape():
+    """10-12：照着旧历史写成「(当时心里：…)」，没标签"""
+    text = "伞在门口。\n\n(当时心里：下雨了，她没带伞。\n\n等会儿去车站接她。)"
+    assert IV.split(text) == ("伞在门口。", "下雨了，她没带伞。\n\n等会儿去车站接她。")
+    assert IV.split("ok.\n(What I felt then: glad)") == ("ok.", "glad")

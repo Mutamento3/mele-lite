@@ -20,12 +20,19 @@ RULES = {
 }
 HOOK = {"zh": "〔心声〕说完以后，最后写 [心声]…[/心声]，写完收尾。",
         "en": "〔Inner voice〕After the reply, end with [inner voice]…[/inner voice]."}
-CONTEXT = {"zh": "（当时心里：{v}）", "en": "(What I felt then: {v})"}
+# 10-12：以前写成「（当时心里：…）」，模型照着历史学，心声不写标签直接漏进正文——历史里就长成它该写的样子
+CONTEXT = {"zh": "[心声]\n{v}\n[/心声]", "en": "[inner voice]\n{v}\n[/inner voice]"}
+_OLD_SHAPE = re.compile(r"[（(]\s*(?:当时心里|what i felt then)\s*[:：]", re.I)
 
 
 def split(text: str) -> tuple[str, str]:
     """切出心声：好几段只留最后一段，每段都从正文里删掉；没收尾 = 到结尾。"""
     rest, voice = text, ""
+    if not _OPEN.search(text) and (m := _OLD_SHAPE.search(text)):    # 老写法：从这儿到结尾都算心声
+        v = text[m.end():].strip()
+        if v.endswith(("）", ")")):
+            v = v[:-1]
+        return text[:m.start()].strip(), v.strip()
     while (o := _OPEN.search(rest)):
         c = _CLOSE.search(rest, o.end())
         voice = rest[o.end():c.start() if c else len(rest)].strip()

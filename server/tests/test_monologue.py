@@ -39,3 +39,11 @@ def test_rules_and_hook_follow_pronoun():
     assert 'he is always "he", never "you"' in en_hook and "{" not in en_hook
     en = rules(Settings(lang="en", user_pronoun="he"), "I let thoughts flow.")
     assert "In the monologue they're \"he\"" in en and "{" not in en
+
+
+def test_close_only_means_everything_before_is_monologue():
+    """10-12：开头的 [独白] 漏写了"""
+    from brain.monologue import split_monologue
+    mono, body = split_monologue("她问我今天累不累。\n\n其实有点累，不想让她担心。\n[/独白]\n\n不累，看到你就不累了。\n\n你呢，今天怎么样？")
+    assert mono == "她问我今天累不累。\n\n其实有点累，不想让她担心。"
+    assert body == "不累，看到你就不累了。\n\n你呢，今天怎么样？"

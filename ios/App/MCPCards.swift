@@ -174,7 +174,8 @@ struct AddMCPServerView: View {
                     TextField("地址（https://…/mcp）", text: $url)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 } footer: {
-                    Text("记忆库的地址就是你部署它的网址后面加 /mcp。")
+                    Text(Lite.local ? "记忆库的地址就是你部署它的网址后面加 /mcp。别的 MCP 照它说明里的地址填，以 /sse 结尾的旧式接法也能连。"
+                         : "记忆库的地址就是你部署它的网址后面加 /mcp。")
                 }
                 Section {
                     SecureField("钥匙", text: $token)

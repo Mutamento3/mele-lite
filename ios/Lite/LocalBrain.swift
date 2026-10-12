@@ -420,8 +420,17 @@ final class LocalBrain: @unchecked Sendable {
         // 上一轮它做过的事（立里程碑、抽牌、发表情包、记账……）：存下来的正文把标记洗掉了，卡片又不进上下文，
         // 它会忘了自己做过、下一轮再做一遍（10-05 真 key 测出来：同一座里程碑连立三轮）。照服务器 TOOLS_HEAD 垫在下一句前面
         var pendingDeeds = ""
+        // 独白一会有一会没有（10-12 内测）：历史里存的只有正文，它看自己前面几轮全没写独白，就跟着不写了。
+        // 最近那一轮它写过的独白垫回去，让它看见自己一直是这么开口的（只垫一轮，省 token、缓存只动尾巴）
+        let lastMonoID: Int? = monologue
+            ? stored.last(where: { ($0["role"] as? String) == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf) })
+                .flatMap { m in ((m["thinking"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : m["id"] as? Int) }
+            : nil
         var history: [Message] = stored.map {
             var text = $0["text"] as? String ?? ""
+            if let id = lastMonoID, ($0["id"] as? Int) == id, let mono = $0["thinking"] as? String {
+                text = Monologue.wrap(mono.trimmingCharacters(in: .whitespacesAndNewlines), zh: zh) + "\n\n" + text
+            }
             let role = $0["role"] as? String
             // 群里：只有它自己说的算 assistant；你和别的 TA 说的是 user，前面垫〔名字〕，别人的心声 / 思考 / 做过的事不进
             let isAssistant = role == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf)
@@ -558,7 +567,6 @@ final class LocalBrain: @unchecked Sendable {
             // 10-08：照服务器的整份独白规矩 + Aporia写的出厂思考风格 + 范文（之前本机只有三行简化版，独白又短又在排练回复）
             req.system += "\n\n" + Monologue.rules(zh: zh, pronoun: pronoun, style: settings["thinking_style_text"] as? String ?? "",
                                                    userName: identity.userName, character: custom ? contact.name : "")
-            req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun)
         }
         let innerOn = settings["inner_voice"] as? Bool ?? false     // 回复后的心声（10-11）：规矩常驻 system，钩子压最后
         if innerOn {
@@ -588,6 +596,8 @@ final class LocalBrain: @unchecked Sendable {
                                            messages: host.store.messages(conv))
         for line in sentinelLines { req.context += "\n\n" + line }
         if innerOn { req.context += "\n\n" + InnerVoice.hook(zh: zh, pronoun: pronoun) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
+        // 独白的提醒压在最最后（10-12：之前排在饮食 / 人物卡 / 人设锚前面，一长就被盖住，一会写一会不写）
+        if monologue { req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun) }
         var text = "", thinking = ""
         var cards: [[String: Any]] = []
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
@@ -631,13 +641,13 @@ final class LocalBrain: @unchecked Sendable {
         }
 
         text = ModelNoise.strip(text)                   // 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
-        if monologue {                                  // 独白切下来当思考，正文才发出去、才进历史
-            let (mono, body) = Monologue.split(text)
-            if !mono.isEmpty { thinking += (thinking.isEmpty ? "" : "\n\n") + mono }
-            text = body
-        }
-        var innerVoiceText = ""                         // 心声（10-11）：最后那段切下来，不进气泡、不念
-        if innerOn { (text, innerVoiceText) = InnerVoice.split(text) }
+        // 独白切下来当思考，正文才发出去、才进历史。没选手写独白也切（10-12 内测：人设 / 旧历史里有标签，模型照写，[/独白] 漏进气泡）
+        let (mono, body) = Monologue.split(text)
+        if !mono.isEmpty { thinking += (thinking.isEmpty ? "" : "\n\n") + mono }
+        text = body
+        var innerVoiceText = ""                         // 心声（10-11）：最后那段切下来，不进气泡、不念；没开也切掉，只是不发卡
+        (text, innerVoiceText) = InnerVoice.split(text)
+        if !innerOn { innerVoiceText = "" }
         if group != nil { text = GroupChat.stripOwnLabel(text, name: selfName) }
         let parsed = Markers.parse(text)
         let thinkingMs = Int((Date().timeIntervalSince(started) * 1000).rounded())

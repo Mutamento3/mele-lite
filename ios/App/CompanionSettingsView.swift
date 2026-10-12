@@ -597,18 +597,21 @@ struct CompanionSettingsView: View {
             Text("档位管 TA 自己想起你的频率。")
         }
         .needsHost()
-        if Lite.local && model.companions.first?.id == companion.id {
+        if Lite.local {
             localDiary
         }
     }
 
-    /// 本机的日记（10-05）：打开 App 时补写昨天的，所以不用灰着
+    /// 本机的日记（10-05）：打开 App 时补写昨天的，所以不用灰着。
+    /// 10-12：别的联系人也能写，开关是 diary_also、默认关（主联系人还是 diary_on、默认开）
     private var localDiary: some View {
-        Tile {
-            Toggle(isOn: store.s("diary_on", true)) {
+        let main = model.companions.first?.id == companion.id
+        let key = main ? "diary_on" : "diary_also"
+        return Tile {
+            Toggle(isOn: store.s(key, main)) {
                 Text("写日记").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
             }
-            if store.settings["diary_on"] as? Bool ?? true {
+            if store.settings[key] as? Bool ?? main {
                 let chars = store.s("diary_chars", 600)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(String(localized: "日记最多写 \(chars.wrappedValue) 字")).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
@@ -617,7 +620,11 @@ struct CompanionSettingsView: View {
                 }
             }
         } header: { GlassHeader("日记") } footer: {
-            Text("每天第一次打开 App 时，昨天你们聊过的话，TA 会写一篇昨天的日记；你那天写了日记，TA 会在页边留一句。用的是你自己的 key，写得越长越贵。")
+            if main {
+                Text("每天第一次打开 App 时，昨天你们聊过的话，TA 会写一篇昨天的日记；你那天写了日记，TA 会在页边留一句。用的是你自己的 key，写得越长越贵。")
+            } else {
+                Text("打开后，每天第一次打开 App 时，昨天你们聊过的话，TA 会写一篇昨天的日记，在日记页多出 TA 的一本。你的日记只给主联系人读。用的是你自己的 key，多一个人写就多花一份。")
+            }
         }
     }
 

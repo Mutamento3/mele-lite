@@ -4,8 +4,9 @@ import MeleLiteCore
 
 /// TA 写日记（10-05 Aporia：本机也要）。服务器是每天凌晨等 TA 睡了写前一天；Lite 没有一直醒着的东西，
 /// 改成**打开 App 时**：昨天聊过（或你昨天写了日记）、TA 还没写昨天的，就用你的 key 补写一篇。只补昨天，不往前翻。
-/// 跟服务器一样只有主联系人写（设置里 diary_on 管开关、diary_chars 管长短）；不写〔锁着〕（本机没有要钥匙那一套）。
-/// 你那天没锁的日记，它在页边留一句（存在你那篇的 margin 上）。提示词在 MeleLiteCore/DiaryDesk。
+/// 主联系人默认写（diary_on，默认开）；10-12 起别的联系人也能写（diary_also，默认关——多一个人写就多花一份 key）。
+/// diary_chars 管长短；不写〔锁着〕（本机没有要钥匙那一套）。
+/// 你那天没锁的日记只给主联系人读，页边那一句也只有它留（存在你那篇的 margin 上）。提示词在 MeleLiteCore/DiaryDesk。
 enum LocalDiary {
     static let sourceChars = 12_000
     nonisolated(unsafe) private static var writing = false
@@ -19,14 +20,25 @@ enum LocalDiary {
         }
     }
 
+    /// 这个联系人写不写日记：主联系人看 diary_on（默认开），别的看 diary_also（默认关）
+    static func writes(_ settings: [String: Any], main: Bool) -> Bool {
+        main ? settings["diary_on"] as? Bool ?? true : settings["diary_also"] as? Bool ?? false
+    }
+
     static func write(_ host: LocalHost, now: Date) async {
-        let s = host.store
-        guard let comp = s.companions.first, let cid = comp["id"] as? String else { return }
-        let st = comp["settings"] as? [String: Any] ?? [:]
-        guard st["diary_on"] as? Bool ?? true, let (provider, key) = host.route(for: comp),
-              !LiteConsent.book.needsAsk(provider) else { return }
         let cal = Calendar.current
         guard let yesterday = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: now)) else { return }
+        for (i, comp) in host.store.companions.enumerated() {               // 一个一个写，不并发（各用各的 key）
+            await write(host, comp, main: i == 0, yesterday: yesterday, now: now)
+        }
+    }
+
+    static func write(_ host: LocalHost, _ comp: [String: Any], main: Bool, yesterday: Date, now: Date) async {
+        let s = host.store
+        guard let cid = comp["id"] as? String else { return }
+        let st = comp["settings"] as? [String: Any] ?? [:]
+        guard writes(st, main: main), let (provider, key) = host.route(for: comp),
+              !LiteConsent.book.needsAsk(provider) else { return }
         let day = dayString(yesterday)
         let all = s.collection("diary")
         if all.contains(where: { ($0["author"] as? String) == "companion" && ($0["companion_id"] as? String) == cid && ($0["day"] as? String) == day }) {
@@ -52,7 +64,7 @@ enum LocalDiary {
         }
         var transcript = lines.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n")
         if transcript.count > sourceChars { transcript = "……\n" + String(transcript.suffix(sourceChars)) }
-        let theirs = all.filter { ($0["author"] as? String) == "user" && ($0["day"] as? String) == day && ($0["private"] as? Bool) != true }
+        let theirs = main ? all.filter { ($0["author"] as? String) == "user" && ($0["day"] as? String) == day && ($0["private"] as? Bool) != true } : []
         guard !transcript.isEmpty || !theirs.isEmpty else { return }          // 没材料不写（防编）
 
         var materials = (zh ? "〔那天的对话〕\n" : "〔That day's conversation〕\n")
@@ -79,7 +91,7 @@ enum LocalDiary {
         if fresh.contains(where: { ($0["author"] as? String) == "companion" && ($0["companion_id"] as? String) == cid && ($0["day"] as? String) == day }) {
             return                                                            // 写的时候另一处已经写了
         }
-        for (id, line) in got.margins {
+        for (id, line) in got.margins where main {
             if let i = fresh.firstIndex(where: { ($0["id"] as? Int) == id && ($0["author"] as? String) == "user" && ($0["day"] as? String) == day }) {
                 fresh[i]["margin"] = line
                 fresh[i]["margin_from"] = contact.name

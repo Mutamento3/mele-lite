@@ -25,7 +25,16 @@ import Testing
         let own = InnerVoice.rules(zh: true, pronoun: "她", style: "只写一句。")
         #expect(own.contains("只写一句。") && !own.contains("口是心非"))
         #expect(InnerVoice.hook(zh: true, pronoun: "她").hasPrefix("〔心声〕"))
-        #expect(InnerVoice.contextLine("有点高兴", zh: true) == "（当时心里：有点高兴）")
-        #expect(InnerVoice.contextLine("glad", zh: false) == "(What I felt then: glad)")
+        #expect(InnerVoice.contextLine("有点高兴", zh: true) == "[心声]\n有点高兴\n[/心声]")
+        #expect(InnerVoice.contextLine("glad", zh: false) == "[inner voice]\nglad\n[/inner voice]")
+        // 历史里的样子再切一次，切得回来
+        #expect(InnerVoice.split("好。\n\n" + InnerVoice.contextLine("有点高兴", zh: true)) == (body: "好。", voice: "有点高兴"))
+    }
+    @Test func catchesTheOldUntaggedShape() {     // 10-12：照着旧历史写成「(当时心里：…)」，没标签
+        let text = "伞在门口。\n\n(当时心里：下雨了，她没带伞。\n\n等会儿去车站接她。)"
+        let (b, v) = InnerVoice.split(text)
+        #expect(b == "伞在门口。")
+        #expect(v == "下雨了，她没带伞。\n\n等会儿去车站接她。")
+        #expect(InnerVoice.split("ok.\n(What I felt then: glad)") == (body: "ok.", voice: "glad"))
     }
 }

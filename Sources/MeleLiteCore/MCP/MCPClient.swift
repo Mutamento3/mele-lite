@@ -2,6 +2,7 @@ import Foundation
 
 /// MCP 小信差（Streamable HTTP）：拿着地址和钥匙去问对面有哪些工具、替 TA 调一次。
 /// 每次都是 POST 一条 JSON-RPC；回来的可能是 JSON，也可能是 SSE（只取 id 对得上的那条）。
+/// 10-12：也认旧式 SSE 接法（地址以 /sse 结尾，或者新接法握手被 404 / 405 打回来）——见 MCPLegacySSE。
 public struct MCPTool: Equatable, Sendable {
     public var name: String
     public var description: String
@@ -39,9 +40,14 @@ public actor MCPClient {
     private var sessionID: String?
     private var ready = false
     private var nextID = 1
+    /// 走旧式 SSE；legacyLink 是那条一直开着的流（断了下次重开）
+    private(set) var legacy: Bool
+    private var legacyLink: MCPLegacySSE?
 
     public init(url: URL, token: String?, session: URLSession = .shared) {
         self.url = url; self.token = token; self.session = session
+        let path = url.path.lowercased()
+        legacy = path.hasSuffix("/sse") || path.hasSuffix("/sse/")
     }
 
     public func listTools() async throws -> [MCPTool] {
@@ -77,18 +83,29 @@ public actor MCPClient {
     // MARK: - 握手和收发
 
     private func request(_ method: String, _ params: [String: Any], timeout: TimeInterval) async throws -> [String: Any] {
+        if let link = legacyLink, await link.dead { ready = false; legacyLink = nil }     // 流断了：重开、重新握手
         if !ready { try await handshake() }
         do {
             return try await rpc(method, params, timeout: timeout)
-        } catch MCPError.http(404) where sessionID != nil {
+        } catch MCPError.http(404) where sessionID != nil || legacyLink != nil {
             // 会话过期（服务器重启过）：重新握手，只重试一次
             ready = false; sessionID = nil
+            await legacyLink?.close(); legacyLink = nil
             try await handshake()
             return try await rpc(method, params, timeout: timeout)
         }
     }
 
     private func handshake() async throws {
+        do {
+            try await initialize()
+        } catch MCPError.http(let code) where !legacy && [400, 404, 405].contains(code) {
+            legacy = true                               // 新接法不认：照规矩退回旧式 SSE 再试一次
+            try await initialize()
+        }
+    }
+
+    private func initialize() async throws {
         _ = try await rpc("initialize", [
             "protocolVersion": Self.protocolVersion,
             "capabilities": [String: Any](),
@@ -111,6 +128,7 @@ public actor MCPClient {
 
     @discardableResult
     private func post(_ body: [String: Any], timeout: TimeInterval, expectReply: Bool) async throws -> [[String: Any]] {
+        if legacy { return try await legacyPost(body, timeout: timeout, expectReply: expectReply) }
         var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -148,5 +166,37 @@ public actor MCPClient {
         if let one = obj as? [String: Any] { return [one] }
         if let many = obj as? [[String: Any]] { return many }
         throw MCPError.badReply
+    }
+
+    /// 旧式 SSE：POST 到流里给的 endpoint；回话在 POST 响应里就直接用，不然去流里等
+    private func legacyPost(_ body: [String: Any], timeout: TimeInterval, expectReply: Bool) async throws -> [[String: Any]] {
+        let link: MCPLegacySSE
+        if let l = legacyLink { link = l } else {
+            link = MCPLegacySSE(sseURL: url, token: token, session: session)
+            legacyLink = link
+        }
+        let endpoint = try await link.open(timeout: timeout)
+        var req = URLRequest(url: endpoint, timeoutInterval: timeout)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token, !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let data: Data, resp: URLResponse
+        do {
+            (data, resp) = try await session.data(for: req)
+        } catch let e as URLError where e.code == .timedOut {
+            throw MCPError.timeout
+        }
+        guard let http = resp as? HTTPURLResponse else { throw MCPError.badReply }
+        if http.statusCode == 401 || http.statusCode == 403 { throw MCPError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else { throw MCPError.http(http.statusCode) }
+        guard expectReply, let id = body["id"] as? Int else { return [] }
+        if let one = try? JSONSerialization.jsonObject(with: data) as? [String: Any], (one["id"] as? Int) == id {
+            await link.drop(id)
+            return [one]
+        }
+        let got = try await link.wait(id, timeout: timeout)
+        guard let one = try? JSONSerialization.jsonObject(with: got) as? [String: Any] else { throw MCPError.badReply }
+        return [one]
     }
 }

@@ -563,9 +563,9 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
 
     out.text = model_noise.strip(out.text)       # 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
     # 心声（10-11）：最后那段 [心声]…[/心声] 切下来，不进气泡、不念，存在这条上、单独推给 App 画小卡片
-    voice_text = ""
-    if settings.inner_voice:
-        out.text, voice_text = inner_voice.split(out.text)
+    out.text, voice_text = inner_voice.split(out.text)     # 没开也切掉（10-12：旧历史 / 人设里有，模型照写），只是不发卡
+    if not settings.inner_voice:
+        voice_text = ""
     if group is not None:
         out.text = G.strip_own_label(out.text, persona.name or "TA")
     if out.thinking.strip():

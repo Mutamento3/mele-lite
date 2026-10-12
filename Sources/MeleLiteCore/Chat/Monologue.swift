@@ -28,6 +28,11 @@ public enum Monologue {
         return (mono, body)
     }
 
+    static let closeShape = try! NSRegularExpression(pattern: #"^\[\s*(?:/|end\s)|(?:/|完|结束|end)\s*\]$"#, options: [.caseInsensitive])
+    static func isClose(_ tag: String) -> Bool {
+        closeShape.firstMatch(in: tag, range: NSRange(location: 0, length: (tag as NSString).length)) != nil
+    }
+
     static func pairCount(_ text: String) -> Int {
         tag.numberOfMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
     }
@@ -38,6 +43,10 @@ public enum Monologue {
         func trim(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let start = tags.first else { return ("", trim(text)) }
         let before = ns.substring(to: start.range.location)
+        // 只收不开（10-12 内测截图：漏写了开头的 [独白]，只剩 [/独白]）：收尾前面的全是独白
+        if isClose(ns.substring(with: start.range)) {
+            return (trim(before), trim(ns.substring(from: start.range.upperBound)))
+        }
         if tags.count >= 2 {
             let end = tags[1]
             let mono = ns.substring(with: NSRange(location: start.range.upperBound, length: end.range.location - start.range.upperBound))
@@ -53,6 +62,11 @@ public enum Monologue {
             }
         }
         return (trim(rest), trim(before))
+    }
+
+    /// 历史里垫回去的样子（10-12）：跟它该写的一模一样
+    public static func wrap(_ mono: String, zh: Bool) -> String {
+        zh ? "[独白]\n\(mono)\n[/独白]" : "[monologue]\n\(mono)\n[/monologue]"
     }
 
     /// 放进 system 的规矩。pronoun = 独白里怎么称呼对方（她 / 他 / TA）；style = 用户自己写的思考风格，空着就不加

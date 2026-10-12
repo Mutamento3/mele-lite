@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - 日记（10-01，Aporia点头的设计 specs/2026-10-01-diary-design.md；朴素版，样子等统一调 UI）
 //
-// 两本：
+// 每个写日记的联系人一本 + 我的（10-12：以前只有主联系人那本；别的联系人在设置里打开「写日记」才有）：
 // - Ta 的：Ta 每天凌晨等你睡着了写前一天。正文你能看；它锁着的那段是一块模糊的 🔒，问它要钥匙（4 位数）才能开。
 // - 我的：你自己写，可以锁起来（锁了 Ta 读不到）。没锁的 Ta 凌晨会读，在页边给你留一句。你的日记不进它的记忆。
 
@@ -16,6 +16,7 @@ struct DiaryEntryDTO: Decodable, Identifiable, Hashable {
     let day: String                 // yyyy-MM-dd
     let body: String
     var from: String?               // Ta 的：谁写的
+    var companionID: String?        // Ta 的：哪个联系人（老数据 / 没有 = 主联系人）
     var hasLocked: Bool?            // Ta 的：有没有锁着的段
     var locked: String?             // Ta 的：打开过才有
     var `private`: Bool?            // 我的：锁起来了
@@ -23,7 +24,7 @@ struct DiaryEntryDTO: Decodable, Identifiable, Hashable {
     var marginFrom: String?
     enum CodingKeys: String, CodingKey {
         case id, author, day, body, from, locked, `private`, margin
-        case hasLocked = "has_locked", marginFrom = "margin_from"
+        case hasLocked = "has_locked", marginFrom = "margin_from", companionID = "companion_id"
     }
 
     var isMine: Bool { author == "user" }
@@ -42,7 +43,7 @@ struct DiaryView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var theme: AppTheme
     @Environment(\.dismiss) private var dismiss
-    @State private var book = "ta"
+    @State private var book = ""                // 联系人 id / "me"；空 = 主联系人那本
     @State private var entries: [DiaryEntryDTO] = []
     @State private var loaded = false
     @State private var more = false
@@ -54,25 +55,41 @@ struct DiaryView: View {
 
     private static let page = 60
     private var taName: String { model.companions.first?.name ?? "Ta" }
-    private var shown: [DiaryEntryDTO] { entries.filter { $0.isMine == (book == "me") } }
+    private var mainID: UUID? { model.companions.first?.id }
+    /// 这篇是哪本：联系人 id；没写 / 联系人删了 = 主联系人
+    private func owner(_ e: DiaryEntryDTO) -> UUID? {
+        if let s = e.companionID, let id = UUID(uuidString: s), model.companions.contains(where: { $0.id == id }) { return id }
+        return mainID
+    }
+    /// 有哪几本 Ta 的：主联系人一直在，别的写过才出现
+    private var books: [CompanionDTO] {
+        let wrote = Set(entries.filter { !$0.isMine }.compactMap(owner))
+        return model.companions.enumerated().filter { $0.offset == 0 || wrote.contains($0.element.id) }.map(\.element)
+    }
+    private var current: CompanionDTO? {
+        books.first { $0.id.uuidString == book } ?? model.companions.first
+    }
+    private var bookName: String { current?.name ?? "Ta" }
+    private var shown: [DiaryEntryDTO] {
+        book == "me" ? entries.filter(\.isMine) : entries.filter { !$0.isMine && owner($0) == current?.id }
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Picker("哪本", selection: $book) {
-                        Text(String(localized: "\(taName) 的")).tag("ta")
-                        Text("我的").tag("me")
+                    if books.count > 2 {                     // 四本以上分段太挤：改成下拉
+                        bookPicker.pickerStyle(.menu)
+                    } else {
+                        bookPicker.pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
                 }
                 if let error {
                     Text(error).font(Typo.sans(Typo.Size.callout)).foregroundStyle(.red)
                 }
                 if loaded && shown.isEmpty {
-                    Text(book == "ta"
-                         ? String(localized: "\(taName) 还没写过日记。每天凌晨等你睡着了，它会写前一天。")
+                    Text(book != "me"
+                         ? String(localized: "\(bookName) 还没写过日记。每天凌晨等你睡着了，它会写前一天。")
                          : String(localized: "还没写过。点右上角写一篇；没锁的 \(taName) 凌晨会读，在页边给你留一句。"))
                         .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
                         .listRowBackground(Color.clear)
@@ -110,7 +127,7 @@ struct DiaryView: View {
                 Button("打开") { if let a = asking { Task { await unlock(a) } } }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text(String(localized: "问 \(taName) 要的那串数字"))
+                Text(String(localized: "问 \(asking?.from ?? taName) 要的那串数字"))
             }
             .sheet(isPresented: $writing) {
                 DiaryEditor(entry: nil, taName: taName) { await reloadAll(); book = "me" }
@@ -123,6 +140,14 @@ struct DiaryView: View {
         }
         .environment(\.colorScheme, .light)
         .task { await reloadAll() }
+    }
+
+    private var bookPicker: some View {
+        Picker("哪本", selection: Binding(get: { book == "me" ? "me" : current?.id.uuidString ?? "" }, set: { book = $0 })) {
+            ForEach(books) { c in Text(String(localized: "\(c.name) 的")).tag(c.id.uuidString) }
+            Text("我的").tag("me")
+        }
+        .listRowBackground(Color.clear)
     }
 
     // Ta 的一篇：日期、正文、锁着那段

@@ -7,9 +7,20 @@ public enum InnerVoice {
     static let close = try! NSRegularExpression(
         pattern: #"\[\s*(?:/\s*(?:心声|inner\s*voice)|(?:心声|inner\s*voice)\s*(?:/|完|结束|end))\s*\]"#, options: .caseInsensitive)
 
+    /// 老写法（10-12 前历史里是「（当时心里：…）」，模型会照着学、不写标签）：从这儿到结尾都算心声
+    static let oldShape = try! NSRegularExpression(pattern: #"[（(]\s*(?:当时心里|what i felt then)\s*[:：]"#, options: .caseInsensitive)
+
     /// 切出心声：好几段只留最后一段，每段都从正文里删掉；没收尾 = 到结尾
     public static func split(_ text: String) -> (body: String, voice: String) {
         var rest = text, voice = ""
+        let all = NSRange(location: 0, length: (text as NSString).length)
+        if open.firstMatch(in: text, range: all) == nil, let m = oldShape.firstMatch(in: text, range: all) {
+            let ns = text as NSString
+            var v = ns.substring(from: m.range.upperBound).trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.hasSuffix("）") || v.hasSuffix(")") { v.removeLast() }
+            return (ns.substring(to: m.range.location).trimmingCharacters(in: .whitespacesAndNewlines),
+                    v.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         while true {
             let ns = rest as NSString
             guard let o = open.firstMatch(in: rest, range: NSRange(location: 0, length: ns.length)) else { break }
@@ -43,8 +54,9 @@ public enum InnerVoice {
            : "〔Inner voice〕After the reply, end with [inner voice]…[/inner voice]."
     }
 
-    /// 下一轮历史里接在那句后面的一行（TA 记得自己当时心里想什么，但分得清那不是说出口的）
+    /// 下一轮历史里接在那句后面（TA 记得自己当时心里想什么，但分得清那不是说出口的）。
+    /// 10-12：以前写成「（当时心里：…）」，模型照着历史学，心声不写标签直接漏进正文——历史里就长成它该写的样子
     public static func contextLine(_ voice: String, zh: Bool) -> String {
-        zh ? "（当时心里：\(voice)）" : "(What I felt then: \(voice))"
+        zh ? "[心声]\n\(voice)\n[/心声]" : "[inner voice]\n\(voice)\n[/inner voice]"
     }
 }

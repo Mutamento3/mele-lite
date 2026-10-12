@@ -55,12 +55,17 @@ def split_monologue(text: str) -> tuple[str, str]:
     return "\n\n".join(monos), body
 
 
+_CLOSE_SHAPE = re.compile(r"^\[\s*(?:/|end\s)|(?:/|完|结束|end)\s*\]$", re.I)
+
+
 def _split_once(text: str) -> tuple[str, str]:
     text = text or ""
     tags = list(_TAG.finditer(text))
     if not tags:
         return "", text.strip()
     start = tags[0]
+    if _CLOSE_SHAPE.search(start.group(0)):     # 只收不开（10-12 内测：漏写了开头的 [独白]）：收尾前面的全是独白
+        return text[:start.start()].strip(), text[start.end():].strip()
     if len(tags) >= 2:
         end = tags[1]
         return text[start.end():end.start()].strip(), (text[:start.start()] + text[end.end():]).strip()

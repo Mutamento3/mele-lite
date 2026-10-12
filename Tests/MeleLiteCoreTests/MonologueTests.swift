@@ -17,6 +17,18 @@ import Testing
         }
     }
 
+    @Test func closeOnlyMeansEverythingBeforeIsMonologue() {   // 10-12：开头的 [独白] 漏写了
+        let (mono, body) = Monologue.split("她问我今天累不累。\n\n其实有点累，不想让她担心。\n[/独白]\n\n不累，看到你就不累了。\n\n你呢，今天怎么样？")
+        #expect(mono == "她问我今天累不累。\n\n其实有点累，不想让她担心。")
+        #expect(body == "不累，看到你就不累了。\n\n你呢，今天怎么样？")
+        #expect(Monologue.split("想她。[独白 完]在呢。") == (monologue: "想她。", body: "在呢。"))
+    }
+
+    @Test func wrapSplitsBackOut() {
+        let (mono, body) = Monologue.split(Monologue.wrap("想她。", zh: true) + "\n\n在呢。")
+        #expect(mono == "想她。" && body == "在呢。")
+    }
+
     @Test func noTagsMeansAllBody() {
         let (mono, body) = Monologue.split("  就这样。 ")
         #expect(mono.isEmpty)

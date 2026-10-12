@@ -40,7 +40,13 @@ for f in docker-compose.yml Caddyfile mele-host; do curl -fsSL "$RAW/$f" -o "$f"
 install -m 755 mele-host /usr/local/bin/mele-host
 
 if [ ! -f .env ]; then
-  ip=$(curl -fsS4 https://api.ipify.org || true)
+  # 查公网 IP：一家查不到换下一家（10-12 内测：国内机器连不上 ipify，脚本停在这儿）
+  ip=""
+  for u in https://api.ipify.org https://ifconfig.me https://ip.sb https://4.ipw.cn; do
+    ip=$(curl -fsS4 -m 8 "$u" 2>/dev/null | tr -d '[:space:]' || true)
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+    ip=""
+  done
   if [ -z "${MELE_DOMAIN:-}" ]; then
     [ -n "$ip" ] || die "拿不到公网 IP，请用 MELE_DOMAIN=你的域名 再跑一次"
     MELE_DOMAIN="${ip//./-}.sslip.io"

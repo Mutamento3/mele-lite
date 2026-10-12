@@ -151,4 +151,4 @@ def test_history_carries_inner_voice():
     msgs = [StoredMsg(1, "user", "下地走走？", "", t), StoredMsg(2, "assistant", "好。", "", t, inner_voice="有点高兴"),
             StoredMsg(3, "assistant", "嗯。", "", t)]
     hist, _ = history_msgs(msgs, "zh")
-    assert [m.text for m in hist] == ["下地走走？", "好。\n\n（当时心里：有点高兴）", "嗯。"]
+    assert [m.text for m in hist] == ["下地走走？", "好。\n\n[心声]\n有点高兴\n[/心声]", "嗯。"]
