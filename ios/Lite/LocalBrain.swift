@@ -603,6 +603,7 @@ final class LocalBrain: @unchecked Sendable {
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
         let cid = comp["id"] as? String ?? ""
         var gaugeNoted = false
+        var retriedEmpty = false                        // 只写了独白 / 什么都没说就停了：再叫一次（只一次，照服务器 09-27）
         do {
             for _ in 0..<(box.specs.isEmpty ? 4 : 6) {
                 var said = "", calls: [ToolCall] = [], raw: String?
@@ -617,6 +618,15 @@ final class LocalBrain: @unchecked Sendable {
                     }
                 }
                 if !said.isEmpty { text += (text.isEmpty ? "" : "\n\n") + said }
+                if calls.isEmpty, group == nil, !retriedEmpty,
+                   InnerVoice.split(Monologue.split(ModelNoise.strip(text)).body).body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // 10-12 内测：想到一半就停了，正文是空的，什么都没发出来、记录停在你那句上。这一段不留（第二次会重写）
+                    retriedEmpty = true
+                    text = ""; thinking = ""
+                    req.context += "\n\n" + (zh ? "（你刚才没写出正文就停了。照常写，写完一定接着写要对\(pronoun)说的话。）"
+                                                  : "(You stopped before writing the reply. Go ahead as usual, and make sure you finish with what you want to say.)")
+                    continue
+                }
                 guard !calls.isEmpty else { break }
                 var results: [ToolResult] = []
                 for c in calls {
@@ -715,6 +725,10 @@ final class LocalBrain: @unchecked Sendable {
                 host.store.saveMessages(c, list)
             }
             if group == nil { LocalBooks.catchReply(host.store, conversation: conv, companion: cid, text: finalText) }
+        }
+        if group == nil, finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, cards.isEmpty {
+            // 补叫一次还是没开口：别悄悄没了，告诉 TA 一声（10-12）
+            say(["type": "error", "kind": "llm", "message": zh ? "\(contact.name) 想了一会儿没说出话来，再发一次试试。" : "\(contact.name) didn't manage to reply. Try sending again."])
         }
         say(["type": "done"])
         LocalEcho.maybeRoll(host, conversation: conv)          // 到记性长度了就在后台卷账本
