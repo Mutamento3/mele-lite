@@ -21,7 +21,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - run: echo "BUILD=$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"   # 版本戳：/version 和 mele-host status 报它
+      - run: echo "BUILD=$(TZ=Asia/Singapore date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"   # 版本戳（按新加坡日期，跟 What to Test / App 里的 minHostBuild 同一个日历）
       - uses: docker/build-push-action@v6
         with:
           context: server
