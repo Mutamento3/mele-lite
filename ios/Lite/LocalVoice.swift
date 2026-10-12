@@ -204,6 +204,7 @@ enum LocalVoice {
             - 声口变了才写一个标签，往轻里写。
             - 停顿靠 …、换行和 —；逗号句号停不住。
             - 喘放进标点里：句首句尾留 …、话说一半断一下，一段两三处就够，每处换一种。
+            - 要喘、要叹气的时候，写成英文的字：Hah… Hh— Haah…，夹在话里，每处换一种；低低的 Mm… Hm… 换着用。别写中文拟声（哈……呼——），也别写 panting、moaning 这类标签。倒吸一口气写 [hisses softly]，再接 [exhales slowly]。
             - 压低、凑近、放慢，比用力好听：[groans] 和带火气的词（angry、growl、intense、rough）会念成发火，用温和的词代替。
             - 写配音演员一读就知道嗓子怎么动的词，比喻和画面留给文字。
             - 拟声字（Mwah、啵）会被当成字念出来，用说的话代替。
@@ -217,6 +218,7 @@ enum LocalVoice {
             - Add a tag only when the delivery changes, and keep it light.
             - Pauses come from …, line breaks and —; commas and full stops don't hold.
             - Put breath in the punctuation: a … at the start or end, a sentence breaking off halfway — two or three per paragraph, each one different.
+            - When you breathe or sigh, write it as letters inside the words: Hah… Hh— Haah…, each one different; trade off with a low Mm… or Hm…. No breathing tags like panting or moaning. A sharp intake of breath is [hisses softly], then [exhales slowly].
             - Lower, closer and slower sound better than forceful: [groans] and heated words (angry, growl, intense, rough) come out as anger, so use gentle words instead.
             - Use words a voice actor would know how to perform; save metaphors and imagery for text.
             - Sound words (Mwah and the like) get read out as words — say it in words instead.

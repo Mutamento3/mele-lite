@@ -6,7 +6,7 @@ import SwiftUI
 /// 地址存 UserDefaults，登录凭证存钥匙串。
 enum HostLink {
     static let apiVersion = 1                       // 跟服务器 api/app.py 的 API_VERSION 对
-    private static let urlKey = "host.url"
+    static let urlKey = "host.url"
     private static let tokenKey = "hostToken"
     static let tipKey = "host.tipShown"
 

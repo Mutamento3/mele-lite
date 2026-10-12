@@ -72,7 +72,16 @@ async def device(body: dict = Body(...), acc: UUID = Depends(account), a: Api = 
         """INSERT INTO devices (account_id, apns_token, updated_at, relay_secret, push_key) VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (account_id, apns_token) DO UPDATE SET updated_at = $3, relay_secret = $4, push_key = $5""",
         acc, token, a.deps.now(), relay_secret, push_key)
+    await _drop_older(a.deps.pool, acc, token, push_key)
     return Response(status_code=204)
+
+
+async def _drop_older(pool, acc: UUID, keep: str, push_key: str | None) -> None:
+    """同一部手机（加密钥匙一样）只留最新登记的那个（10-12 内测：每次打开 App 都登记出一个新编号，
+    一条消息推好几遍、越开越多）"""
+    if push_key:
+        await pool.execute("DELETE FROM devices WHERE account_id = $1 AND push_key = $2 AND apns_token <> $3",
+                           acc, push_key, keep)
 
 
 async def _relay_register(relay: str, token: str, sandbox: bool) -> tuple[str, str] | None:
@@ -107,6 +116,7 @@ async def device_via_host(body: dict = Body(...), acc: UUID = Depends(account), 
         """INSERT INTO devices (account_id, apns_token, updated_at, relay_secret, push_key) VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (account_id, apns_token) DO UPDATE SET updated_at = $3, relay_secret = $4, push_key = $5""",
         acc, f"relay:{rid}", a.deps.now(), secret, push_key)
+    await _drop_older(a.deps.pool, acc, f"relay:{rid}", push_key)
     return {"relay_id": rid}
 
 

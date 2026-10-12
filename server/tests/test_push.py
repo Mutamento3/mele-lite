@@ -187,3 +187,25 @@ async def test_host_registers_with_relay_for_the_phone(pool, monkeypatch):
     assert calls == [("https://relay.test", "apns-tok", False)]
     row = await pool.fetchrow("SELECT apns_token, relay_secret, push_key FROM devices")
     assert dict(row) == {"apns_token": "relay:rid9", "relay_secret": "sec9", "push_key": key}
+
+
+async def test_same_phone_keeps_only_newest_relay_device(pool, monkeypatch):
+    """每次打开 App 都会再登记一次：同一把加密钥匙只留最新的，不然一条消息推好几遍（10-12）"""
+    import api.routes_patrol as R
+    n = iter(range(100))
+
+    async def fake(relay, token, sandbox):
+        return f"rid{next(n)}", "sec"
+    monkeypatch.setattr(R, "_relay_register", fake)
+    e = Env(pool, [])
+    t = await e.login()
+    phone = base64.b64encode(b"k" * 32).decode()
+    other = base64.b64encode(b"j" * 32).decode()
+    e.app.state.api.cfg.push_relay = "https://relay.test"
+    async with e.client(t) as c:
+        for _ in range(3):
+            await c.post("/me/devices/relay", json={"token": "apns-tok", "push_key": phone})
+        await c.post("/me/devices", json={"apns_token": "relay:direct", "relay_secret": "s", "push_key": phone})
+        await c.post("/me/devices/relay", json={"token": "ipad-tok", "push_key": other})      # 另一台设备留着
+    rows = await pool.fetch("SELECT apns_token, push_key FROM devices ORDER BY apns_token")
+    assert [(r["apns_token"], r["push_key"] == phone) for r in rows] == [("relay:direct", True), ("relay:rid3", False)]
