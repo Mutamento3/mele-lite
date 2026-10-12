@@ -38,6 +38,8 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         let conv = (notification.request.content.userInfo["conversation"] as? String).flatMap(UUID.init)
         let open = await MainActor.run { Self.openConversation }
+        // App 开着时来了它的话：列表 / 主屏卡片的预览跟着刷新（10-13 内测：要点进去再出来才看到最新那句）
+        await MainActor.run { NotificationCenter.default.post(name: .lumiWindowsChanged, object: nil) }
         if let conv, conv == open { return [] }          // 人就在这个窗口里，消息自己会出现
         return [.banner, .list, .sound]
     }

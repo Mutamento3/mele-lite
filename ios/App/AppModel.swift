@@ -440,6 +440,19 @@ final class AppModel: ObservableObject {
         if let c = companions.first(where: { $0.id == made.id }) { await openChat(c) }
     }
 
+    /// 只刷各联系人的窗口和群（预览、时间、未读），不重拉整个账号：回到 App、App 开着来了推送时用（10-13 内测：
+    /// 列表只在进出聊天页时刷新，回到 App 看到的还是旧的最后一句）
+    func refreshWindows() async {
+        guard loaded else { return }
+        for c in companions {
+            if let convs: [ConversationDTO] = try? await api.call("GET", "companions/\(c.id.lowercased)/conversations") {
+                conversations[c.id] = convs.filter { $0.altName.isEmpty }
+                altWindows[c.id] = convs.filter { !$0.altName.isEmpty }
+            }
+        }
+        await loadGroups()
+    }
+
     /// 聊天页关掉以后：记下看到这儿了，刷新一下这个人的窗口（预览、时间）
     func chatClosed(_ target: ChatTarget) async {
         if target.incognito { return }

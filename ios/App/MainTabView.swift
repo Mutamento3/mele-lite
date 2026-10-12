@@ -76,6 +76,7 @@ struct MainTabView: View {
             // 回前台：报「在」、天气 / 在哪 / 日程 / 步数（开了的那几样）；进后台停掉「在」的钟
             if phase == .active {
                 ContextReporter.shared.foreground(); PushDelegate.clearDelivered()
+                Task { await model.refreshWindows() }                       // 不在的时候它可能说过话：列表预览刷新
                 Task {
                     await FocusStore.shared.refresh(api: model.api)             // 专注：读回插件记的、到点自动结束
                 }
@@ -101,6 +102,7 @@ struct MainTabView: View {
             if let places: [PlaceDTO] = try? await model.api.call("GET", "places") { PlaceMonitor.shared.sync(places) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .lumiRelationshipChanged)) { _ in Task { await model.refresh() } }
+        .onReceive(NotificationCenter.default.publisher(for: .lumiWindowsChanged)) { _ in Task { await model.refreshWindows() } }
         .onOpenURL { url in                         // 小组件点开（09-29）：mele://focus · drawer · wakes · music
             if HostLink.parse(url) != nil { return }      // 扫了 Host 的二维码：SignedIn 那层接（引导里也能扫）
             switch url.host {

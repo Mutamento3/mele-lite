@@ -19,6 +19,8 @@ extension Notification.Name {
     static let lumiOpenWakes = Notification.Name("LumiOpenWakes")
     /// 它改了你们的关系（09-29）：刷联系人，聊天页名字旁边的图标跟着换
     static let lumiRelationshipChanged = Notification.Name("LumiRelationshipChanged")
+    /// 列表该刷新了（App 开着时来了推送，10-13）
+    static let lumiWindowsChanged = Notification.Name("LumiWindowsChanged")
 }
 
 struct FocusPrefill: Identifiable {
