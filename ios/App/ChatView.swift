@@ -243,6 +243,8 @@ struct ChatView: View {
         .onDisappear { chat.stop() }
         .onChange(of: scenePhase) { old, phase in
             if phase == .active, old == .background { chat.resume() }
+            // 切到后台就断开事件流（10-12 内测：挂起时连接还在，Host 以为你还看着，它的回话就不推送了）
+            if phase == .background { chat.stop() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .lumiFocusSaid)) { _ in Task { await chat.catchUp() } }
         .task {

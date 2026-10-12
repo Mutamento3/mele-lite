@@ -762,11 +762,19 @@ struct Springboard: View {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", (HomeApp.allCases.firstIndex(of: app) ?? 0) + 1)) ?? UUID()
     }
 
+    private func afterMenu(_ open: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            open()
+        }
+    }
+
     private var editBar: some View {
         HStack {
             Menu {
-                Button { showGallery = true } label: { Label("加小组件", systemImage: "square.grid.2x2") }
-                Button { showAppPicker = true } label: { Label("加软件", systemImage: "app.badge") }
+                // 等菜单收完再弹（10-12 内测：16 Pro / iOS 26 上菜单还在收、弹窗被吞掉，点了没反应）
+                Button { afterMenu { showGallery = true } } label: { Label("加小组件", systemImage: "square.grid.2x2") }
+                Button { afterMenu { showAppPicker = true } } label: { Label("加软件", systemImage: "app.badge") }
             } label: {
                 Image(systemName: "plus").font(Typo.icon(16, .bold)).foregroundStyle(theme.ink)
                     .frame(width: 34, height: 34).background(Circle().fill(.regularMaterial))

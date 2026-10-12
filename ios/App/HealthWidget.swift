@@ -128,6 +128,7 @@ final class HealthWidgetData: ObservableObject {
 }
 
 struct HealthCard: View {
+    @Environment(\.widgetPreview) private var widgetPreview
     @EnvironmentObject private var theme: AppTheme
     @ObservedObject private var data = HealthWidgetData.shared
     let metric: HealthMetric
@@ -168,7 +169,8 @@ struct HealthCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .task(id: metric) { await data.load(metric) }
+        // 添加小组件页里的预览不读健康（10-12 内测：预览一画就弹健康授权，跟添加页撞在一起，iOS 26 真机上添加页弹不出来）
+        .task(id: metric) { if !widgetPreview { await data.load(metric) } }
         .confirmationDialog("显示哪一项", isPresented: $choosing, titleVisibility: .visible) {
             ForEach(HealthMetric.allCases) { m in Button(m.title) { onPick(m) } }
         }
@@ -186,4 +188,9 @@ struct HealthCard: View {
             }
         }
     }
+}
+
+/// 是不是添加小组件页里的预览（预览不去要权限、不读数据）
+extension EnvironmentValues {
+    @Entry var widgetPreview = false
 }

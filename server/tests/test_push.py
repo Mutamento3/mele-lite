@@ -164,3 +164,26 @@ async def test_relay_gone_deletes_device_and_no_apns_without_cfg(pool):
     assert await send_pending(pool, None, transport, relay_url="https://relay.test") == 1
     assert sent == ["https://relay.test/push"]
     assert await pool.fetchval("SELECT count(*) FROM devices WHERE apns_token = 'relay:gone'") == 0
+
+
+async def test_host_registers_with_relay_for_the_phone(pool, monkeypatch):
+    """手机连不上中转站（10-12：国内打不开 workers.dev）：设备号交给 Host，Host 替它登记"""
+    import api.routes_patrol as R
+    calls = []
+
+    async def fake(relay, token, sandbox):
+        calls.append((relay, token, sandbox))
+        return "rid9", "sec9"
+    monkeypatch.setattr(R, "_relay_register", fake)
+    e = Env(pool, [])
+    t = await e.login()
+    key = base64.b64encode(b"k" * 32).decode()
+    async with e.client(t) as c:
+        assert (await c.post("/me/devices/relay", json={"token": "apns-tok", "push_key": key})).status_code == 409   # 没开中转
+        e.app.state.api.cfg.push_relay = "https://relay.test"
+        r = await c.post("/me/devices/relay", json={"token": "apns-tok", "sandbox": False, "push_key": key})
+        assert r.status_code == 200 and r.json() == {"relay_id": "rid9"}
+        assert (await c.post("/me/devices/relay", json={"token": "apns-tok"})).status_code == 400
+    assert calls == [("https://relay.test", "apns-tok", False)]
+    row = await pool.fetchrow("SELECT apns_token, relay_secret, push_key FROM devices")
+    assert dict(row) == {"apns_token": "relay:rid9", "relay_secret": "sec9", "push_key": key}

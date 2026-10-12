@@ -211,7 +211,12 @@ final class AppModel: ObservableObject {
         guard let token = PushDelegate.pendingToken else { return }
         if Lite.local { return }                                     // 手机里的小管家没有推送
         if Lite.hosted {                                             // 连着 Mele Host：经中转站（10-04 第四步）
-            guard let relay = await PushRelay.register(token: token) else { return }
+            guard let relay = await PushRelay.register(token: token) else {
+                // 手机连不上中转站（10-12 内测：国内打不开 workers.dev，设备一直没登记、推送全落空）：交给自己的 Host 去登记
+                try? await api.send("POST", "me/devices/relay", json: ["token": token, "sandbox": PushRelay.sandbox,
+                                                                        "push_key": PushRelay.pushKey])
+                return
+            }
             try? await api.send("POST", "me/devices", json: ["apns_token": "relay:\(relay.id)", "relay_secret": relay.secret,
                                                              "push_key": PushRelay.pushKey])
             return

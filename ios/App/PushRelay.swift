@@ -8,6 +8,12 @@ enum PushRelay {
     static let group = "group.chat.mele.app"
     private static var shared: UserDefaults { UserDefaults(suiteName: group) ?? .standard }
 
+    #if DEBUG
+    static let sandbox = true                  // Xcode 直接装的走苹果的沙盒；TestFlight / App Store 走正式
+    #else
+    static let sandbox = false
+    #endif
+
     /// 这台手机的推送加密钥匙（32 字节，base64）；第一次用时生成
     static var pushKey: String {
         if let k = shared.string(forKey: "push.key") { return k }
@@ -24,14 +30,9 @@ enum PushRelay {
         if d.string(forKey: "relay.token") == token, let id = d.string(forKey: "relay.id"), let s = d.string(forKey: "relay.secret") {
             return (id, s)
         }
-        var req = URLRequest(url: base.appendingPathComponent("register"))
+        var req = URLRequest(url: base.appendingPathComponent("register"), timeoutInterval: 10)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        #if DEBUG
-        let sandbox = true                     // Xcode 直接装的走苹果的沙盒；TestFlight / App Store 走正式
-        #else
-        let sandbox = false
-        #endif
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "sandbox": sandbox])
         guard let (data, resp) = try? await URLSession.shared.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

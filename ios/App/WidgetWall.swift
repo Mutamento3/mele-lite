@@ -612,6 +612,7 @@ struct WidgetGallery: View {
             let w = geo.size.width
             let cardW = size == .small ? (w - 12) / 2 : w
             WidgetCard(slot: WidgetSlot(kind: kind, size: size), onOpenWakes: { _ in })
+                .environment(\.widgetPreview, true)
                 .allowsHitTesting(false)
                 .frame(width: cardW, height: size == .large ? 320 : 150)
                 .modifier(CardIf(on: !kind.bare))

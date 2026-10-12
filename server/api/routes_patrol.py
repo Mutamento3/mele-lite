@@ -75,6 +75,41 @@ async def device(body: dict = Body(...), acc: UUID = Depends(account), a: Api = 
     return Response(status_code=204)
 
 
+async def _relay_register(relay: str, token: str, sandbox: bool) -> tuple[str, str] | None:
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.post(f"{relay.rstrip('/')}/register", json={"token": token, "sandbox": sandbox})
+    if r.status_code != 200:
+        return None
+    j = r.json()
+    rid, secret = j.get("relay_id"), j.get("relay_secret")
+    return (str(rid), str(secret)) if rid and secret else None
+
+
+@router.post("/me/devices/relay")
+async def device_via_host(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """手机连不上推送中转站时（10-12 内测：国内打不开 workers.dev，设备一直没登记、29 条推送全落空），
+    把苹果设备号交给自己的 Host，Host 替它去中转站登记。"""
+    token = str(body.get("token") or "").strip()
+    push_key = str(body.get("push_key") or "").strip()[:100]
+    if not token or len(token) > 200 or not push_key:
+        raise HTTPException(400, "要带 token 和 push_key")
+    if not a.cfg.push_relay:
+        raise HTTPException(409, "这台 Host 没开推送中转")
+    try:
+        got = await _relay_register(a.cfg.push_relay, token, bool(body.get("sandbox")))
+    except Exception:
+        got = None
+    if got is None:
+        raise HTTPException(502, "Host 也连不上推送中转站")
+    rid, secret = got
+    await a.deps.pool.execute(
+        """INSERT INTO devices (account_id, apns_token, updated_at, relay_secret, push_key) VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (account_id, apns_token) DO UPDATE SET updated_at = $3, relay_secret = $4, push_key = $5""",
+        acc, f"relay:{rid}", a.deps.now(), secret, push_key)
+    return {"relay_id": rid}
+
+
 # ── 你定的钟 ──
 
 def _clock(c: store.Clock) -> dict:
