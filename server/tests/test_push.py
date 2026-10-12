@@ -47,9 +47,9 @@ async def test_unwatched_reply_is_queued_and_sent(pool):
     import push.apns as A
     A.GAP = 0
     assert await send_pending(pool, cfg(), transport) == 1
-    # 两条气泡各推一条：第一条两台都试（死的那台删掉），第二条只剩活的那台
-    assert [u.rsplit("/", 1)[1] for u, _, _ in sent] == ["tok-a", "tok-dead", "tok-a"]
-    _, headers, body = sent[0]
+    # 两条气泡各推一条：第一条两台都试（死的那台删掉；新登记的先推），第二条只剩活的那台
+    assert [u.rsplit("/", 1)[1] for u, _, _ in sent] == ["tok-dead", "tok-a", "tok-a"]
+    _, headers, body = sent[1]
     assert headers["apns-topic"] == "com.lingxi.companion" and headers["authorization"].startswith("bearer ")
     assert body["aps"]["alert"] == {"title": "Lumi", "body": "诶你回来啦"} and body["conversation"] == conv["id"]
     assert sent[2][2]["aps"]["alert"]["body"] == "今天怎么样"
@@ -209,3 +209,32 @@ async def test_same_phone_keeps_only_newest_relay_device(pool, monkeypatch):
         await c.post("/me/devices/relay", json={"token": "ipad-tok", "push_key": other})      # 另一台设备留着
     rows = await pool.fetch("SELECT apns_token, push_key FROM devices ORDER BY apns_token")
     assert [(r["apns_token"], r["push_key"] == phone) for r in rows] == [("relay:direct", True), ("relay:rid3", False)]
+
+
+async def test_stale_duplicate_devices_get_one_push_and_midway_failure_does_not_resend(pool):
+    """10-12 内测「推送还是好几条重复」：①旧版登记出来的同一部手机好几个编号，推的时候只推最新的；
+    ②推到一半中转断了，已经推出去的气泡不再整条重推"""
+    key = base64.b64encode(b"k" * 32).decode()
+    e = Env(pool, ["早呀\n\n醒了没"])
+    t = await e.login()
+    async with e.client(t) as c:
+        comp, conv = await e.first_window(c)
+        await c.patch(f"/companions/{comp['id']}", json={"settings": {"reply_wait": 0}})
+        await c.post(f"/conversations/{conv['id']}/messages", json={"text": "早"})
+        await e.rooms.idle(UUID(conv["id"]))
+    acc = await pool.fetchval("SELECT account_id FROM push_queue LIMIT 1")
+    for i, rid in enumerate(["old1", "old2", "new"]):          # 绕过登记接口，直接摆出旧版留下的样子
+        await pool.execute("INSERT INTO devices (account_id, apns_token, updated_at, relay_secret, push_key) "
+                           "VALUES ($1, $2, now() - make_interval(mins => $3), 's', $4)", acc, f"relay:{rid}", 10 - i, key)
+    sent = []
+
+    async def transport(url, headers, body):
+        if len(sent) == 1:
+            raise OSError("relay hiccup")                        # 第二个气泡推的时候断了
+        sent.append(json.loads(body)["relay_id"])
+        return 200, ""
+    import push.apns as A
+    A.GAP = 0
+    assert await send_pending(pool, None, transport, relay_url="https://relay.test") == 1
+    assert sent == ["new"]                                       # 只推最新的那个编号
+    assert await send_pending(pool, None, transport, relay_url="https://relay.test") == 0   # 不整条重来

@@ -216,6 +216,7 @@ final class ChatStore: ObservableObject {
         Task {
             await catchUp()
             for echo in echoes { await post(echo) }
+            if !echoes.isEmpty { armWatchdog() }      // stop() 把看门狗也停了
         }
         startStream()
     }
@@ -350,9 +351,16 @@ final class ChatStore: ObservableObject {
             let page: MessagesPage = try await api.call("GET", "\(path)/messages", query: [
                 URLQueryItem(name: "after", value: String(messages.last?.id ?? 0)),
             ])
+            // 它已经说完了、done 却是断线（切后台）时发的没收到：当它说完了，推着的那几行换成真身，三个点收掉（10-12）
+            // 自己刚发、还没确认送到的（回显还在）不算：那时服务器还不知道这一轮
+            let over = !page.busy && echoes.isEmpty
+            if over, !live.isEmpty { liveDone = true }
             merge(page.messages)
             if !page.busy, !live.isEmpty, liveDone { live = []; liveDone = false; rebuild() }
-            if !page.busy { dropEmptyThinking() }     // 断线没等到 done：占位的「正在想」别一直挂着
+            if over { typing = false; typingName = nil }
+            if !page.busy {
+                dropEmptyThinking()                   // 断线没等到 done：占位的「正在想」别一直挂着
+            }
         } catch {
             // 网络不好：等下一次事件或回前台再补
         }

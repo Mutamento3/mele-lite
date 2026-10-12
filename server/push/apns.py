@@ -84,8 +84,12 @@ async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 
         if r["kind"] == "activity":       # 灵动岛 10-02 拿掉了；以前排下的旧条目直接标掉
             await pool.execute("UPDATE push_queue SET sent_at = now() WHERE id = $1", r["id"])
             continue
-        rows_d = await pool.fetch("SELECT apns_token, relay_secret, push_key FROM devices WHERE account_id = $1",
-                                  r["account_id"])
+        rows_d = await pool.fetch("SELECT apns_token, relay_secret, push_key FROM devices WHERE account_id = $1 "
+                                  "ORDER BY updated_at DESC", r["account_id"])
+        # 同一部手机（加密钥匙一样）只推最新登记的那个（10-12 内测：旧版每次打开都登记一个新编号，登记时才清，
+        # 已经登记好不再登记的手机旧编号一直在，一条推好几遍）
+        seen: set[str] = set()
+        rows_d = [d for d in rows_d if not d["push_key"] or not (d["push_key"] in seen or seen.add(d["push_key"]))]
         relayed = {d["apns_token"]: d for d in rows_d if d["apns_token"].startswith("relay:")}
         devices = [d["apns_token"] for d in rows_d
                    if (d["apns_token"] in relayed and relay_url) or (d["apns_token"] not in relayed and cfg)]
@@ -100,6 +104,7 @@ async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 
             bodies = [payload(p.name, bubble, str(r["conversation_id"]), str(r["companion_id"]), urgent=r["urgent"],
                               quiet=r["quiet"])
                       for bubble in split_reply(r["text"], cap=MAX_BUBBLES)]
+        sent_any = False
         for i, one in enumerate(bodies):
             body = json.dumps(one, ensure_ascii=False).encode()
             if i:
@@ -117,9 +122,13 @@ async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 
                     url, h, b = f"{cfg.host}/3/device/{token}", headers, body
                 try:
                     status, reason = await transport(url, h, b)
-                except Exception as e:              # noqa: BLE001 —— 连不上苹果：这条留着下一轮再发
+                except Exception as e:              # noqa: BLE001
                     log.warning("apns send failed: %s", e)
-                    return 0
+                    if not sent_any:                # 一条都还没出去（连不上苹果 / 中转）：整条留着下一轮再发
+                        return 0
+                    devices.remove(token)           # 已经推出去几条了：别整条重来（前面的会再推一遍），这台这次就算了
+                    continue
+                sent_any = True
                 if status == 410 or reason in ("BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"):
                     devices.remove(token)
                     await pool.execute("DELETE FROM devices WHERE account_id = $1 AND apns_token = $2",

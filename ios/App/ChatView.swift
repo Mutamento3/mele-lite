@@ -27,6 +27,7 @@ struct ChatView: View {
     @EnvironmentObject var avatars: AvatarStore
     @EnvironmentObject var session: SessionStore
     @Environment(\.scenePhase) private var scenePhase
+    @State private var wentBackground = false
     @ObservedObject private var favorites = FavoritesStore.shared
 
     let companionID: UUID
@@ -241,10 +242,11 @@ struct ChatView: View {
         .onAppear { chat.start() }
         .task { await favorites.loadIfNeeded(session.api) }
         .onDisappear { chat.stop() }
-        .onChange(of: scenePhase) { old, phase in
-            if phase == .active, old == .background { chat.resume() }
-            // 切到后台就断开事件流（10-12 内测：挂起时连接还在，Host 以为你还看着，它的回话就不推送了）
-            if phase == .background { chat.stop() }
+        .onChange(of: scenePhase) { _, phase in
+            // 切到后台就断开事件流（10-12 内测：挂起时连接还在，Host 以为你还看着，它的回话就不推送了）。
+            // 回来是 后台 → inactive → active，最后一跳的 old 是 inactive，所以用自己记的标记判断，不看 old
+            if phase == .background { wentBackground = true; chat.stop() }
+            if phase == .active, wentBackground { wentBackground = false; chat.resume() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .lumiFocusSaid)) { _ in Task { await chat.catchUp() } }
         .task {

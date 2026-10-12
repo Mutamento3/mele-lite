@@ -8,6 +8,10 @@ enum HostLink {
     static let apiVersion = 1                       // 跟服务器 api/app.py 的 API_VERSION 对
     static let urlKey = "host.url"
     private static let tokenKey = "hostToken"
+    /// 断开时记下的上一个 Host（10-12 内测：本地部署出门连不上就得断，回家再连要重填地址、再去服务器拿配对码）。
+    /// 凭证留着，回来一键连回去；Host 不认了才只留地址、要配对码
+    private static let lastURLKey = "host.lastURL"
+    private static let lastTokenKey = "hostTokenLast"
     static let tipKey = "host.tipShown"
 
     struct Link { let url: URL; let token: String }
@@ -136,9 +140,43 @@ enum HostLink {
         Keychain.write(tokenKey, token)
     }
 
-    static func disconnect() {
+    /// keepToken：自己点断开 = 留着凭证下次一键连回；Host 不认凭证了 = 只留地址
+    static func disconnect(keepToken: Bool = true) {
+        if let link = current {
+            UserDefaults.standard.set(link.url.absoluteString, forKey: lastURLKey)
+            if keepToken { Keychain.write(lastTokenKey, link.token) } else { Keychain.delete(lastTokenKey) }
+        }
         UserDefaults.standard.removeObject(forKey: urlKey)
         Keychain.delete(tokenKey)
+    }
+
+    /// 上一个 Host 的地址（没连着的时候才有意义）；token 为空 = 要重新配对
+    static var last: (url: URL, token: String?)? {
+        guard let s = UserDefaults.standard.string(forKey: lastURLKey), let url = URL(string: s) else { return nil }
+        return (url, Keychain.read(lastTokenKey))
+    }
+
+    static func forgetLast() {
+        UserDefaults.standard.removeObject(forKey: lastURLKey)
+        Keychain.delete(lastTokenKey)
+    }
+
+    /// 用记下的凭证连回去：先看连不连得上，再看 Host 还认不认这个凭证
+    static func reconnect() async throws {
+        guard let last, let token = last.token else { throw Failure(message: String(localized: "要重新配对")) }
+        var req = URLRequest(url: last.url.appendingPathComponent("me"), timeoutInterval: 15)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let resp: URLResponse
+        do { (_, resp) = try await URLSession.shared.data(for: req) } catch {
+            throw Failure(message: String(localized: "连不上这个地址：服务器开着吗？手机跟它在同一个网络里吗？"))
+        }
+        switch (resp as? HTTPURLResponse)?.statusCode {
+        case 200: save(url: last.url, token: token)
+        case 401, 403:
+            Keychain.delete(lastTokenKey)
+            throw Failure(message: String(localized: "Host 不认这台手机了：在服务器上运行 mele-host pair 拿新的配对码"))
+        default: throw Failure(message: String(localized: "Host 没回应，等一下再试"))
+        }
     }
 
     /// 扫安装时那个二维码：mele://host?u=<地址>&c=<配对码>
@@ -166,6 +204,20 @@ struct HostCard: View {
     @State private var moving = false
     @State private var movedNote: String?
     @State private var sent: (Int, Int)?
+    @State private var rejoining = false
+    @State private var rejoinError: String?
+    @State private var forgot = false          // 点了「忘掉」：重画一下
+
+    private func rejoin() async {
+        rejoining = true; rejoinError = nil
+        defer { rejoining = false }
+        do {
+            try await HostLink.reconnect()
+            session.switchHost()
+        } catch {
+            rejoinError = error.localizedDescription
+        }
+    }
 
     #if LITE
     /// 连的时候没搬、或者后来手机里又多了：再搬一次（已经搬过的不重复）
@@ -206,6 +258,31 @@ struct HostCard: View {
                 #endif
                 Button(String(localized: "断开，回到手机里")) { confirmLeave = true }
                     .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
+            } else if let last = HostLink.last {
+                // 断开过：地址记着，凭证还在就一键连回去（10-12 内测）
+                HStack(spacing: 8) {
+                    Circle().fill(theme.inkDim.opacity(0.5)).frame(width: 8, height: 8)
+                    Text(last.url.host ?? last.url.absoluteString).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Hint(text: last.token == nil
+                     ? String(localized: "已断开。地址记着，在服务器上运行 mele-host pair 拿个新配对码就能连回去。")
+                     : String(localized: "已断开，现在用的是手机里那份。地址和配对都记着，回到能连上它的网络点一下就回去。"))
+                if last.token != nil {
+                    Button(rejoining ? String(localized: "连接中…") : String(localized: "连回去")) { Task { await rejoin() } }
+                        .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep).disabled(rejoining)
+                } else {
+                    Button(String(localized: "填配对码连回去")) { connecting = true }
+                        .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
+                }
+                if let rejoinError { Hint(text: rejoinError) }
+                HStack(spacing: 16) {
+                    if last.token != nil {
+                        Button(String(localized: "用新配对码连")) { connecting = true }
+                    }
+                    Button(String(localized: "忘掉这个 Host")) { HostLink.forgetLast(); rejoinError = nil; forgot.toggle() }
+                }
+                .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
             } else {
                 Hint(text: String(localized: "没连接。连上自己部署的 Mele Host 以后，TA 能在你关掉 App 时主动来找你、自己醒来、记得更久。"))
                 Button { connecting = true } label: {
@@ -214,10 +291,13 @@ struct HostCard: View {
                 .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
             }
         }
+        .id(forgot)
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
-        .sheet(isPresented: $connecting) { HostConnectSheet().environmentObject(session).environmentObject(theme) }
+        .sheet(isPresented: $connecting) {
+            HostConnectSheet(address: HostLink.last?.url.absoluteString ?? "").environmentObject(session).environmentObject(theme)
+        }
         .sheet(isPresented: $guide) {
             HostGuideSheet(onConnect: { guide = false; connecting = true }).environmentObject(theme)
         }
@@ -227,7 +307,7 @@ struct HostCard: View {
                 session.switchHost()
             }
         } message: {
-            Text("回到手机里那份。Host 上的聊天留在 Host 上，下次连回去还在。")
+            Text("回到手机里那份。Host 上的聊天留在 Host 上，地址和配对都记着，下次点「连回去」就行。")
         }
     }
 }
@@ -442,7 +522,9 @@ struct HostTip: View {
             .sheet(isPresented: $guide, onDismiss: { shown = true }) {
                 HostGuideSheet(onConnect: { guide = false; connecting = true }).environmentObject(theme)
             }
-            .sheet(isPresented: $connecting) { HostConnectSheet().environmentObject(session).environmentObject(theme) }
+            .sheet(isPresented: $connecting) {
+            HostConnectSheet(address: HostLink.last?.url.absoluteString ?? "").environmentObject(session).environmentObject(theme)
+        }
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }

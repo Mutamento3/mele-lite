@@ -80,7 +80,7 @@ private struct SignedIn: View {
                         session.switchHost()
                     }
                 } message: {
-                    Text("回到手机里那份。Host 上的聊天留在 Host 上；修好以后在服务器上运行 mele-host pair 拿新的配对码，到 Me 里重新连。")
+                    Text("回到手机里那份。Host 上的聊天留在 Host 上；地址和配对都记着，连得上了到 Me → Mele Host 点「连回去」。")
                 }
             } else if (model.profile?.name ?? "").isEmpty {
                 OnboardingView()

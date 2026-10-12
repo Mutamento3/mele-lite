@@ -49,7 +49,7 @@ final class SessionStore: ObservableObject {
     private func unauthorized() {
         #if LITE
         // Host 不认这个凭证了（服务器重置过、换了 SECRET）：断开回本机，去 Me 重新配对；Lite 没有登录页
-        if HostLink.connected { HostLink.disconnect(); switchHost() }
+        if HostLink.connected { HostLink.disconnect(keepToken: false); switchHost() }
         #else
         logout(local: true)
         #endif
