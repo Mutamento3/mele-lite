@@ -195,7 +195,11 @@ enum LocalNotes {
         for p in picked { now[String(p["id"] as? Int ?? 0)] = LocalStore.iso(Date()) }
         shown[conv] = now
         s.write("people-shown.json", shown)
-        return picked.map { renderPerson($0, zh: zh) }
+        return picked.map { p in
+            var mine = p
+            mine["impression"] = LocalRooms.impressions(s, p)[cid] ?? ""     // 只递这个 TA 自己的印象（10-12）
+            return renderPerson(mine, zh: zh)
+        }
     }
 
     /// 跟 server/memory/people.py render_person 同一个样子
@@ -219,6 +223,36 @@ enum LocalNotes {
         guard let i = all.firstIndex(where: { ($0["id"] as? Int) == id }) else { return }
         all[i]["told"] = true
         s.saveCollection(collection, all)
+    }
+}
+#endif
+
+#if LITE && DEBUG
+/// 自测（10-12，-peopleSelfTest）：人物卡印象按 TA 分开——老卡那句算主联系人的，各 TA 只拿到自己的
+enum LocalPeopleSelfTest {
+    static func run() {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("people-\(Int(Date().timeIntervalSince1970))")
+        let s = LocalStore(root: tmp)
+        s.write("companions.json", [["id": "a", "persona": ["name": "Lumi"], "settings": [String: Any]()],
+                                    ["id": "b", "persona": ["name": "Mia"], "settings": [String: Any]()]])
+        s.saveCollection("people", [["id": 1, "name": "阿杰", "relation": "大学室友", "facts": "", "impression": "有点闷",
+                                     "created_by": "user", "hidden_from": [String]()]])
+        var fails: [String] = []
+        func line(_ cid: String, _ conv: String) -> String {
+            LocalNotes.peopleLines(s, companion: cid, conversation: conv, text: "今天跟阿杰吃饭", zh: true).joined()
+        }
+        if !line("a", "c1").contains("有点闷") { fails.append("老印象没算到主联系人") }
+        if line("b", "c2").contains("有点闷") { fails.append("老印象漏给了第二个 TA") }
+        LocalRooms.setImpressions(s, id: 1, ["b": "挺仗义的"])
+        if !line("b", "c3").contains("挺仗义的") { fails.append("第二个 TA 看不到自己的印象") }
+        if line("a", "c4").contains("挺仗义的") { fails.append("第二个 TA 的印象漏给了主联系人") }
+        if !line("a", "c5").contains("有点闷") { fails.append("并进来以后主联系人的老印象丢了") }
+        let page = LocalRooms.personForPage(s, s.collection("people")[0])
+        if (page["impressions"] as? [String: String]) != ["a": "有点闷", "b": "挺仗义的"] { fails.append("页面拿到的印象不对：\(page["impressions"] ?? "nil")") }
+        LocalRooms.setImpressions(s, id: 1, ["a": ""])
+        if line("a", "c6").contains("有点闷") { fails.append("清空主联系人的印象没清掉") }
+        NSLog(fails.isEmpty ? "[people-selftest] PASS" : "[people-selftest] FAILED: \(fails.joined(separator: "；"))")
+        try? FileManager.default.removeItem(at: tmp)
     }
 }
 #endif

@@ -175,6 +175,27 @@ async def test_import_rooms_skips_unknown_companion(pool, box, tmp_path):
     assert "drawer" not in got["rooms"]
 
 
+async def test_import_moves_local_memories(pool, box, tmp_path):
+    """手机里的本地记忆库也搬（10-13 内测：连上 Host 以为记忆没了）：记到 TA 名下、钉住的还是钉住、再搬不重复"""
+    acc = await auth.new_account(pool)
+    mems = [{"id": f"{CID}:shared:1", "companion_id": CID, "content": "小满下周三考数学", "importance": 7, "tags": ["考试"],
+             "kind": "memory", "created_at": "2026-10-02T00:00:00Z"},
+            {"id": f"{CID}:shared:2", "companion_id": CID, "content": "小满不吃香菜", "kind": "core",
+             "created_at": "0001-01-01T00:00:00.000Z"},                  # 手机读不懂的日子：用搬家那刻
+            {"id": "x:shared:3", "companion_id": "6b1f0c3e-9999-4a2b-9c3d-000000000009", "content": "别人的"}]
+    got = await host_import.run(pool, box, acc, bundle(rooms={"memories": mems}), files_dir=tmp_path, now=NOW,
+                                embedder=FakeEmbedder())
+    assert got["rooms"] == {"memories": 2}
+    rows = await pool.fetch("SELECT kind, content, importance, created_at FROM memories WHERE user_id = $1 ORDER BY id", UUID(CID))
+    assert [(r["kind"], r["content"]) for r in rows] == [("memory", "小满下周三考数学"), ("core", "小满不吃香菜")]
+    assert rows[0]["importance"] == 7 and rows[0]["created_at"] == datetime(2026, 10, 2, tzinfo=timezone.utc)
+    assert rows[1]["created_at"] == NOW
+    again = await host_import.run(pool, box, acc, bundle(rooms={"memories": mems}), files_dir=tmp_path, now=NOW,
+                                  embedder=FakeEmbedder())
+    assert "memories" not in again.get("rooms", {})
+    assert await pool.fetchval("SELECT count(*) FROM memories WHERE user_id = $1", UUID(CID)) == 2
+
+
 # ---- 第二批房间（10-05）：相册、表情包、书架、饮食、朋友圈、塔罗——带文件的先单独传（stage），包里只写指纹 ----
 
 import hashlib

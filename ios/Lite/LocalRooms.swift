@@ -20,10 +20,21 @@ enum LocalRooms {
         case ("DELETE", "favorites", 3) where p[1] == "group":
             return removeWhere(host.store, "favorites", 404, String(localized: "没有这组")) { ($0["group_id"] as? String) == p[2] }
         // 人物卡
-        case ("GET", "people", 1): return .json(host.store.collection("people"))
-        case ("POST", "people", 1): return addPerson(host.store, r.json)
-        case ("PATCH", "people", 2): return patchItem(host.store, "people", Int(p[1]), r.json,
-                                                       keys: ["name", "aliases", "relation", "facts", "impression", "hidden_from"])
+        case ("GET", "people", 1): return .json(host.store.collection("people").map { personForPage(host.store, $0) })
+        case ("POST", "people", 1):
+            let res = addPerson(host.store, r.json)
+            if let imp = r.json["impressions"] as? [String: String], case .json(let v, _) = res, let pid = (v as? [String: Any])?["id"] as? Int {
+                setImpressions(host.store, id: pid, imp)
+            }
+            return res
+        case ("PATCH", "people", 2):
+            // 页面按 TA 分开改印象（impressions）；老样子只给一栏的（impression）照旧当主联系人那句
+            var body = r.json
+            if let imp = body.removeValue(forKey: "impressions") as? [String: String] { setImpressions(host.store, id: Int(p[1]), imp); body["impression"] = nil }
+            else if let one = body.removeValue(forKey: "impression") as? String, let main = host.store.companions.first?["id"] as? String {
+                setImpressions(host.store, id: Int(p[1]), [main: one])
+            }
+            return patchItem(host.store, "people", Int(p[1]), body, keys: ["name", "aliases", "relation", "facts", "hidden_from"])
         case ("DELETE", "people", 2): return removeWhere(host.store, "people", 404, String(localized: "没有这张卡")) { ($0["id"] as? Int) == Int(p[1]) }
         // 它记着的事（远事）
         case ("GET", "companions", 3) where p[2] == "dates": return .json(dates(host.store, companion: p[1]))
@@ -162,6 +173,38 @@ enum LocalRooms {
     }
 
     // MARK: 人物卡
+
+    /// 人物卡上每个 TA 各自的印象（10-12 内测：「印象」原来只有一栏、大家共用，第一个 TA 的看法递给第二个 TA 时
+    /// 写着「你的印象」，它就当成自己的了）。老卡那一栏不知道是谁写的，算主联系人的
+    static func impressions(_ s: LocalStore, _ p: [String: Any]) -> [String: String] {
+        var d = p["impressions"] as? [String: String] ?? [:]
+        let legacy = (p["impression"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !legacy.isEmpty, let main = s.companions.first?["id"] as? String, d[main] == nil { d[main] = legacy }
+        return d.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    /// 给页面的样子：带上各 TA 的印象；老的单栏留着给只认它的地方（= 主联系人那句）
+    static func personForPage(_ s: LocalStore, _ p: [String: Any]) -> [String: Any] {
+        var o = p
+        let d = impressions(s, p)
+        o["impressions"] = d
+        o["impression"] = (s.companions.first?["id"] as? String).flatMap { d[$0] } ?? ""
+        return o
+    }
+
+    /// 改一张卡上某些 TA 的印象（空字符串 = 删掉那个 TA 的），老单栏并进来以后清掉
+    static func setImpressions(_ s: LocalStore, id: Int?, _ changes: [String: String]) {
+        var all = s.collection("people")
+        guard let i = all.firstIndex(where: { ($0["id"] as? Int) == id }) else { return }
+        var d = impressions(s, all[i])
+        for (cid, v) in changes {
+            let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+            d[cid] = t.isEmpty ? nil : t
+        }
+        all[i]["impressions"] = d
+        all[i]["impression"] = ""
+        s.saveCollection("people", all)
+    }
 
     static func addPerson(_ s: LocalStore, _ b: [String: Any]) -> LocalResponse {
         let name = (b["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)

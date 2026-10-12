@@ -238,3 +238,52 @@ async def test_stale_duplicate_devices_get_one_push_and_midway_failure_does_not_
     assert await send_pending(pool, None, transport, relay_url="https://relay.test") == 1
     assert sent == ["new"]                                       # 只推最新的那个编号
     assert await send_pending(pool, None, transport, relay_url="https://relay.test") == 0   # 不整条重来
+
+
+async def _one_queued(pool, reply="好的"):
+    key = base64.b64encode(b"k" * 32).decode()
+    e = Env(pool, [reply])
+    t = await e.login()
+    async with e.client(t) as c:
+        comp, conv = await e.first_window(c)
+        await c.patch(f"/companions/{comp['id']}", json={"settings": {"reply_wait": 0}})
+        await c.post("/me/devices", json={"apns_token": "relay:r1", "relay_secret": "s", "push_key": key})
+        await c.post(f"/conversations/{conv['id']}/messages", json={"text": "嗯"})
+        await e.rooms.idle(UUID(conv["id"]))
+
+
+async def test_no_reply_from_relay_is_not_resent(pool):
+    """10-13 内测「重复了一整个屏幕，还在重复」：请求到了中转、回话没等到（超时）→ 原来整条留着每 3 秒再推一遍。
+    现在当它送到了：下一轮不再推"""
+    import httpx
+    import push.apns as A
+    A.GAP = 0
+    await _one_queued(pool)
+    calls = []
+
+    async def timeout(url, headers, body):
+        calls.append(url)
+        raise httpx.ReadTimeout("no answer")
+    assert await send_pending(pool, None, timeout, relay_url="https://relay.test") == 1
+    assert await send_pending(pool, None, timeout, relay_url="https://relay.test") == 0
+    assert len(calls) == 1
+
+
+async def test_cannot_connect_is_retried(pool):
+    """连都没连上（请求没出去）：留着下一轮再推，不会重复"""
+    import httpx
+    import push.apns as A
+    A.GAP = 0
+    await _one_queued(pool)
+    down = True
+    calls = []
+
+    async def flaky(url, headers, body):
+        calls.append(url)
+        if down:
+            raise httpx.ConnectError("refused")
+        return 200, ""
+    assert await send_pending(pool, None, flaky, relay_url="https://relay.test") == 0
+    down = False
+    assert await send_pending(pool, None, flaky, relay_url="https://relay.test") == 1
+    assert len(calls) == 2

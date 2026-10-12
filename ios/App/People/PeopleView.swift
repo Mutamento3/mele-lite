@@ -14,6 +14,8 @@ struct PersonCard: Decodable, Identifiable, Equatable {
     let relation: String
     let facts: String
     let impression: String
+    /// 手机里的卡：每个 TA 各自的印象（联系人 id → 那句，10-12）；Host 的卡没有，只有上面一栏
+    var impressions: [String: String]? = nil
     let created_by: String
     let hidden_from: [String]
 }
@@ -164,6 +166,7 @@ struct PersonEditView: View {
     @State private var relation = ""
     @State private var facts = ""
     @State private var impression = ""
+    @State private var perTA: [String: String] = [:]     // 联系人 id（小写）→ 印象
     @State private var hidden: Set<String> = []
     @State private var saving = false
 
@@ -178,12 +181,29 @@ struct PersonEditView: View {
                 Section(String(localized: "要记得")) {
                     TextEditor(text: $facts).frame(minHeight: 90)
                 }
-                Section {
-                    TextEditor(text: $impression).frame(minHeight: 70)
-                } header: {
-                    Text(String(localized: "Ta 的印象"))
-                } footer: {
-                    Text(String(localized: "这一栏是聊天的时候 Ta 自己补的，你也可以改。"))
+                if separateImpressions {
+                    // 每个 TA 各记各的：只有它自己那句会递给它（10-12 内测：原来一栏大家共用，别人的看法被当成自己的）
+                    Section {
+                        ForEach(model.companions) { c in
+                            let key = c.id.uuidString.lowercased()
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(c.name).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.secondary)
+                                TextEditor(text: Binding(get: { perTA[key] ?? "" }, set: { perTA[key] = $0 })).frame(minHeight: 50)
+                            }
+                        }
+                    } header: {
+                        Text(String(localized: "Ta 们的印象"))
+                    } footer: {
+                        Text(String(localized: "聊天的时候每个 Ta 自己补自己的，别的 Ta 看不到。你也可以改。"))
+                    }
+                } else {
+                    Section {
+                        TextEditor(text: $impression).frame(minHeight: 70)
+                    } header: {
+                        Text(String(localized: "Ta 的印象"))
+                    } footer: {
+                        Text(String(localized: "这一栏是聊天的时候 Ta 自己补的，你也可以改。"))
+                    }
                 }
                 if model.companions.count > 0 {
                     Section {
@@ -220,11 +240,15 @@ struct PersonEditView: View {
         }
     }
 
+    /// 手机里的卡（Lite 本机）按 TA 分开记印象；Host 上的、记忆库里的还是一栏
+    private var separateImpressions: Bool { Lite.local && store.source == nil && (person == nil || person?.impressions != nil) }
+
     private func fill() {
         store.error = nil
         guard let p = person else { return }
         name = p.name; aliases = p.aliases.joined(separator: ", "); relation = p.relation
         facts = p.facts; impression = p.impression; hidden = Set(p.hidden_from.map { $0.lowercased() })
+        perTA = Dictionary(uniqueKeysWithValues: (p.impressions ?? [:]).map { ($0.key.lowercased(), $0.value) })
     }
 
     private func save() async {
@@ -232,9 +256,17 @@ struct PersonEditView: View {
         defer { saving = false }
         let list = aliases.replacingOccurrences(of: "，", with: ",").replacingOccurrences(of: "、", with: ",")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let body: [String: Any] = ["name": name.trimmingCharacters(in: .whitespaces), "aliases": list,
-                                   "relation": relation, "facts": facts, "impression": impression,
-                                   "hidden_from": Array(hidden)]
+        var body: [String: Any] = ["name": name.trimmingCharacters(in: .whitespaces), "aliases": list,
+                                   "relation": relation, "facts": facts, "hidden_from": Array(hidden)]
+        if separateImpressions {
+            // 每个联系人都带上（空的 = 删掉那个 TA 的）
+            body["impressions"] = Dictionary(uniqueKeysWithValues: model.companions.map { c in
+                let k = c.id.uuidString.lowercased()
+                return (k, perTA[k] ?? "")
+            })
+        } else {
+            body["impression"] = impression
+        }
         if await store.save(person, body: body) { dismiss() }
     }
 }

@@ -27,7 +27,7 @@ from .settings import Settings
 VERSION = 1
 STAGING = "import-staging"
 STAGE_MAX = 25 * 1024 * 1024          # 一个文件最多 25MB（书 20MB、照片 10MB 都装得下）
-TEXT_KINDS = ("diary", "drawer", "dates", "todos", "wallet", "people", "lore", "favorites", "milestones")
+TEXT_KINDS = ("diary", "drawer", "dates", "todos", "wallet", "people", "lore", "favorites", "milestones", "memories")
 FILE_KINDS = ("album", "stickers", "books", "book-marks", "book-reading", "food", "food-covers", "moments",
               "moment-profiles", "tarot")   # 顺序要紧：书在划线前，饮食在封面前
 
@@ -286,6 +286,19 @@ async def _rooms(pool, acc: UUID, rooms: dict, *, now: datetime, embedder, files
             hide = [u for u in (_uuid(x) for x in it.get("hidden_from") or []) if u in mine]
             if hide:
                 await hidden.set_hidden(pool, acc, p.id, hide)
+        elif kind == "memories":
+            # 手机里的本地记忆库（10-13 内测：连上 Host 以为记忆没了——搬家原来不带它）。
+            # 手机共用那本拷给每个用它的 TA（Host 上记忆各记各的），id 由手机拼成「联系人:本:编号」，再搬不重复
+            import memory as M
+            c, ok = comp(it)
+            content = str(it.get("content") or "").strip()
+            if not ok or not content or embedder is None:
+                return False
+            kind_ = "core" if it.get("kind") == "core" else "memory"
+            await M.remember(pool, embedder, c, content, importance=int(it.get("importance") or 5),
+                             tags=[str(t) for t in it.get("tags") or []],
+                             valence=float(it.get("valence") or 0), arousal=float(it.get("arousal") or 0),
+                             kind=kind_, resolved=bool(it.get("resolved")), now=when if (when := _when(it.get("created_at"), now)).year >= 2000 else now)
         elif kind == "lore":
             c, ok = comp(it, optional=True)
             if not ok or not str(it.get("content") or "").strip():

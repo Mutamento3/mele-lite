@@ -119,16 +119,21 @@ enum LocalTools {
                 // 用户自己写的卡：「是谁 / 要记得的事」TA 改不了，只能记自己的印象（10-04 Aporia：用户写的最大）
                 let locked = (p["created_by"] as? String) == "user"
                 var patch: [String: Any] = [:]
-                for k in (locked ? ["impression"] : ["relation", "facts", "impression"]) { if let v = a[k] as? String, !v.isEmpty { patch[k] = v } }
+                for k in (locked ? [] : ["relation", "facts"]) { if let v = a[k] as? String, !v.isEmpty { patch[k] = v } }
                 patch["updated_by"] = "ai"
                 _ = LocalRooms.patchItem(s, "people", p["id"] as? Int, patch, keys: Array(patch.keys))
+                // 印象记在这个 TA 自己名下，别的 TA 看不到（10-12）
+                if let v = a["impression"] as? String, !v.isEmpty, !companion.isEmpty { LocalRooms.setImpressions(s, id: p["id"] as? Int, [companion: v]) }
                 let note = locked && (a["relation"] != nil || a["facts"] != nil) ? "（是谁、要记得的事是 TA 自己写的，你改不了，只记了你的印象）" : ""
                 return Outcome(result: "人物卡更新了：\(name)\(note)", card: card("person", "更新了人物卡", "Updated a card", name))
             }
-            let (good, v) = ok(LocalRooms.addPerson(s, a))
+            var fresh = a
+            let imp = fresh.removeValue(forKey: "impression") as? String ?? ""
+            let (good, v) = ok(LocalRooms.addPerson(s, fresh))
             guard good else { return Outcome(result: "没记上：\(v["detail"] ?? "")", card: nil) }
             if let pid = v["id"] as? Int {   // addPerson 是用户接口，会写成用户写的；TA 记的要标回 TA
                 _ = LocalRooms.patchItem(s, "people", pid, ["created_by": "ai", "updated_by": "ai"], keys: ["created_by", "updated_by"])
+                if !imp.isEmpty, !companion.isEmpty { LocalRooms.setImpressions(s, id: pid, [companion: imp]) }
             }
             return Outcome(result: "记住了：\(name)", card: card("person", "记住了一个人", "Remembered someone", name))
         case "relationship":

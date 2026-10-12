@@ -125,7 +125,10 @@ enum HostLink {
         }
         var out = body.compactMapValues { $0 as? Int }
         // 房间（10-05）：服务器回 {kind: 几条}，这里只要一个总数
-        if let r = body["rooms"] as? [String: Any] { out["rooms"] = r.values.compactMap { $0 as? Int }.reduce(0, +) }
+        if let r = body["rooms"] as? [String: Any] {
+            out["memories"] = r["memories"] as? Int ?? 0                 // 记忆单独报（10-13）
+            out["rooms"] = r.filter { $0.key != "memories" }.values.compactMap { $0 as? Int }.reduce(0, +)
+        }
         return out
     }
 
@@ -226,7 +229,7 @@ struct HostCard: View {
         defer { moving = false; sent = nil }
         do {
             let got = try await HostLink.moveFromPhone { sent = ($0, $1) }
-            movedNote = String(localized: "搬好了：\(got["companions"] ?? 0) 个联系人、\(got["messages"] ?? 0) 条聊天、房间里 \(got["rooms"] ?? 0) 样东西（已经在 Host 上的没重复搬）")
+            movedNote = String(localized: "搬好了：\(got["companions"] ?? 0) 个联系人、\(got["messages"] ?? 0) 条聊天、\(got["memories"] ?? 0) 条记忆、房间里 \(got["rooms"] ?? 0) 样东西（已经在 Host 上的没重复搬）")
             if (got["companions"] ?? 0) > 0 { session.switchHost() }
         } catch {
             movedNote = error.localizedDescription
@@ -343,7 +346,7 @@ struct HostConnectSheet: View {
                 Label(String(localized: "连上了"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Text("手机里有 \(has.companions) 个联系人、\(has.messages) 条聊天。要搬到 Host 上吗？")
             } footer: {
-                Text("搬的是：我的设定、模型钥匙、联系人（人设、设置、头像）、平常窗口的聊天，还有日记、信、远事、待办、钱包、人物卡、世界书、收藏夹、里程碑、相册、表情包、书架、饮食、朋友圈、塔罗。照片多的话要传一会儿，中途断了再点一次接着传。手机里的原件一个都不删，断开就回来。")
+                Text("搬的是：我的设定、模型钥匙、联系人（人设、设置、头像）、平常窗口的聊天、本地记忆库，还有日记、信、远事、待办、钱包、人物卡、世界书、收藏夹、里程碑、相册、表情包、书架、饮食、朋友圈、塔罗。照片多的话要传一会儿，中途断了再点一次接着传。手机里的原件一个都不删，断开就回来。")
             }
             if let moved {
                 Section {
@@ -409,7 +412,7 @@ struct HostConnectSheet: View {
         defer { busy = false; sent = nil }
         do {
             let got = try await HostLink.moveFromPhone { sent = ($0, $1) }
-            moved = String(localized: "搬好了：\(got["companions"] ?? 0) 个联系人、\(got["messages"] ?? 0) 条聊天、房间里 \(got["rooms"] ?? 0) 样东西")
+            moved = String(localized: "搬好了：\(got["companions"] ?? 0) 个联系人、\(got["messages"] ?? 0) 条聊天、\(got["memories"] ?? 0) 条记忆、房间里 \(got["rooms"] ?? 0) 样东西")
         } catch {
             self.error = error.localizedDescription
         }

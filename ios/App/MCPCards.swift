@@ -434,7 +434,7 @@ struct MemoryLinkRows: View {
                 if LocalMemoryID.isLocal(current) {
                     // 分仓（10-11 Aporia）：默认跟别的 TA 共用一本；开了就只记 TA 自己的
                     Toggle(isOn: Binding(get: { store.settings["memory_scope"] as? String == "own" }, set: { on in
-                        scopeChange = (on, on ? String(localized: "要把共用那本的记忆拷一份给 TA 吗？")
+                        scopeChange = (on, on ? String(localized: "共用那本里是所有 TA 一起记的事（也有别的 TA 记下的）。要拷一份给 TA 吗？")
                                               : String(localized: "要把 TA 这本的记忆拷一份回共用那本吗？"))
                     })) {
                         row(String(localized: "这个 TA 单独记一本"),
@@ -444,8 +444,14 @@ struct MemoryLinkRows: View {
                     // 挂在开关自己身上：跟下面那个「搬不搬」叠在同一个 view 上只会弹一个
                     .confirmationDialog(scopeChange?.question ?? "", isPresented: Binding(get: { scopeChange != nil }, set: { if !$0 { scopeChange = nil } }),
                                         titleVisibility: .visible) {
-                        Button("拷一份") { applyScope(copy: true) }
-                        Button("不拷，空着开始") { applyScope(copy: false) }
+                        // 打开时「不拷」排第一（10-13 内测：顺手点了拷一份，单独那本里全是别的 TA 记的，以为没分开）
+                        if scopeChange?.own == true {
+                            Button("不拷，空着开始") { applyScope(copy: false) }
+                            Button("拷一份") { applyScope(copy: true) }
+                        } else {
+                            Button("拷一份") { applyScope(copy: true) }
+                            Button("不拷，空着开始") { applyScope(copy: false) }
+                        }
                         Button("取消", role: .cancel) { scopeChange = nil }
                     } message: {
                         Text("拷过去的保留原来的日子，重复的自动合并；原来那本不动。")

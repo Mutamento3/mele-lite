@@ -47,6 +47,23 @@ enum LocalExport {
         var rooms: [String: Any] = [:]
         for kind in roomKinds { rooms[kind] = s.collection(kind) }
         rooms["diary"] = s.collection("diary").filter { ($0["author"] as? String) == "user" }
+        // Host 的人物卡印象只有一栏：带主联系人那句（手机里按 TA 分开记，10-12）
+        rooms["people"] = s.collection("people").map { LocalRooms.personForPage(s, $0) }
+        // 本地记忆库（10-13 内测：连上 Host 以为记忆没了）：接的是本地记忆库的 TA，各带 TA 用的那本；
+        // 共用那本每个用它的 TA 都带一份（Host 上记忆各记各的）。编号拼成「联系人:本:编号」，再搬不重复
+        var mems: [[String: Any]] = []
+        for c in s.companions {
+            guard let cid = c["id"] as? String, (c["settings"] as? [String: Any])?["memory_server"] as? String == LocalMemory.serverID else { continue }
+            let scope = LocalMemory.scope(of: c)
+            for m in LocalMemory.vault(scope).all where !m.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                mems.append(["id": "\(cid):\(scope):\(m.id)", "companion_id": cid,
+                             "content": m.title.isEmpty || m.content.contains(m.title) ? m.content : "\(m.title)：\(m.content)",
+                             "kind": m.kind == "core" ? "core" : "memory", "importance": m.importance, "tags": m.tags,
+                             "valence": m.valence, "arousal": m.arousal, "resolved": m.resolved,
+                             "created_at": LocalStore.iso(m.createdAt)])
+            }
+        }
+        rooms["memories"] = mems
         var files: [String: URL] = [:]
         if withFiles { fileRooms(s, into: &rooms, files: &files) }
         return (["version": version, "profile": host.profile, "keys": keys, "companions": companions, "rooms": rooms], files)

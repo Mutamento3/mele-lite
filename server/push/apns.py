@@ -72,6 +72,17 @@ def seal(push_key_b64: str, payload_dict: dict) -> str:
     return base64.b64encode(nonce + ct).decode()
 
 
+def not_sent(e: BaseException) -> bool:
+    """这个错是不是「请求根本没发出去」（连不上、排不上队）——只有这种重发才不会让手机收到两遍"""
+    try:
+        import httpx
+        if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+            return True
+    except ImportError:
+        pass
+    return isinstance(e, ConnectionRefusedError)
+
+
 async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 20, relay_url: str | None = None) -> int:
     """发一批。transport(url, headers, body_bytes) -> (status, reason)。返回发了几条（每条可能多台手机）。
     cfg = 我们自己的苹果钥匙（直连）；relay_url = 推送中转（Mele Host 用：relay: 开头的设备加密后交给它）。"""
@@ -124,9 +135,12 @@ async def send_pending(pool, cfg: ApnsConfig | None, transport, *, limit: int = 
                     status, reason = await transport(url, h, b)
                 except Exception as e:              # noqa: BLE001
                     log.warning("apns send failed: %s", e)
-                    if not sent_any:                # 一条都还没出去（连不上苹果 / 中转）：整条留着下一轮再发
+                    if not sent_any and not_sent(e):    # 根本没连上（请求没出去）：整条留着下一轮再发，不会重复
                         return 0
-                    devices.remove(token)           # 已经推出去几条了：别整条重来（前面的会再推一遍），这台这次就算了
+                    # 请求可能已经到了、只是回话没等到（10-13 内测：国内连 workers.dev 常这样，每 3 秒重推一遍、
+                    # 刷满一屏、推满 30 分钟）：当它送到了，宁可偶尔漏一条也不刷屏；这台这条就算了
+                    devices.remove(token)
+                    sent_any = True
                     continue
                 sent_any = True
                 if status == 410 or reason in ("BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"):

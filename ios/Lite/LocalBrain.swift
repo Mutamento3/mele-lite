@@ -529,6 +529,7 @@ final class LocalBrain: @unchecked Sendable {
         // 自测（10-11）：SIMCTL_CHILD_LITE_TEST_DUMP=1 把这一轮的 system 写到 lite-host/debug-system.txt
         if ProcessInfo.processInfo.environment["LITE_TEST_DUMP"] != nil {
             try? req.system.write(to: host.store.fileURL("debug-system.txt"), atomically: true, encoding: .utf8)
+            try? req.context.write(to: host.store.fileURL("debug-context.txt"), atomically: true, encoding: .utf8)
         }
         #endif
         // 工具：它可以先动手（记账、记待办、记饮食……）再说话；一轮最多来回 4 次，接了 MCP 6 次

@@ -257,17 +257,18 @@ enum LocalMemoryRooms {
 
     struct Offline: Error {}
 
-    static func movePerson(_ d: [String: Any], remote: Bool) -> MovePerson {
+    /// impression：给了就用它（手机的卡按 TA 分开记印象，搬去记忆库时带这个 TA 的那句，10-12）
+    static func movePerson(_ d: [String: Any], remote: Bool, impression: String? = nil) -> MovePerson {
         MovePerson(id: d["id"] as? Int, name: d["name"] as? String ?? "", aliases: d["aliases"] as? [String] ?? [],
                    relation: d["relation"] as? String ?? "", facts: (remote ? d["content"] : d["facts"]) as? String ?? "",
-                   impression: d["impression"] as? String ?? "", byUser: (d["created_by"] as? String) != "ai")
+                   impression: impression ?? d["impression"] as? String ?? "", byUser: (d["created_by"] as? String) != "ai")
     }
 
     static func peopleToRemote(_ host: LocalHost, _ sv: LocalMCP.Server, companion cid: String) async throws -> Int {
         guard let remote = await remotePeople(host, sv) else { throw Offline() }
         let mine = host.store.collection("people").filter { !(($0["hidden_from"] as? [String]) ?? []).contains(cid) }
-        let plan = MemoryMove.people(from: mine.map { movePerson($0, remote: false) }, into: remote.map { movePerson($0, remote: true) },
-                                     sourceWinsTies: true)
+        let plan = MemoryMove.people(from: mine.map { movePerson($0, remote: false, impression: LocalRooms.impressions(host.store, $0)[cid] ?? "") },
+                                     into: remote.map { movePerson($0, remote: true) }, sourceWinsTies: true)
         var n = 0
         for step in plan {
             let ok: Bool
