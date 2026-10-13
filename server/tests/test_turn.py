@@ -313,3 +313,65 @@ async def test_inner_voice_is_cut_out_stored_and_sent(pool, user_a):
     assert stored[1].text == "来，下地。" and stored[1].inner_voice == "她喊得又急又霸道。"
     await turn(d, user_a, "好吧")
     assert m.requests[1].messages[1].text == "来，下地。\n\n[心声]\n她喊得又急又霸道。\n[/心声]"
+
+
+async def test_backlog_is_rolled_in_batches_before_the_turn(pool, user_a, monkeypatch):
+    """10-13 内测：中转不回 usage 的老版本积了几千条没卷。开口前先分批卷：挑记忆只看这一批，这一轮不再整段发出去。"""
+    monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
+    monkeypatch.setattr(ledger, "BACKLOG_CHARS", 20)
+    monkeypatch.setattr(ledger, "BATCH_CHARS", 10)
+    monkeypatch.setattr(ledger, "needs_roll", lambda *a: False)          # 只看开口前那一步
+    await archive.save_settings(pool, user_a, {"memory_length": 5})
+    for role, text in [("user", "我对芒果过敏，吃了嘴唇会肿"), ("assistant", "好的，以后不给你推荐芒果"),
+                       ("user", "今天去游泳了"), ("assistant", "游得开心吗")]:
+        await archive.add_message(pool, user_a, role, text, now=NOW)
+    m = FakeModel(["", "TA 说自己对芒果过敏，吃了嘴唇会肿，我答应以后不给 TA 推荐芒果。", "晚安呀"])
+    ev = await turn(make_deps(pool, m), user_a, "晚安")
+    pick, write, chat = m.requests
+    assert [x.text for x in pick.messages[:2]] == ["我对芒果过敏，吃了嘴唇会肿", "好的，以后不给你推荐芒果"]
+    assert len(pick.messages) == 3                                             # 只有这一批 + 挑记忆的话
+    assert write.model == "fake-ledger"
+    assert {"type": "ledger", "status": "done", "count": 2} in ev
+    assert not any("芒果" in x.text for x in chat.messages)                    # 卷掉的不再跟着这一轮发
+    assert "芒果过敏" in chat.system[1].text
+    assert [x.text for x in await archive.unrolled(pool, user_a)] == ["今天去游泳了", "游得开心吗", "晚安", "晚安呀"]
+
+
+async def test_no_backlog_no_extra_calls(pool, user_a):
+    m = FakeModel(["在的"])
+    await turn(make_deps(pool, m), user_a, "在吗")
+    assert len(m.requests) == 1
+
+
+async def test_too_long_rolls_then_retries_once(pool, user_a, monkeypatch):
+    """10-14：模型窗口比记性长度小——卷账本只在成功之后，不先卷就每句都报「太长」。现在先卷，再用短了的历史试一次。"""
+    monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
+    monkeypatch.setattr(ledger, "needs_roll", lambda *a: False)
+    for role, text in [("user", "我对芒果过敏，吃了嘴唇会肿"), ("assistant", "好的，以后不给你推荐芒果"),
+                       ("user", "今天去游泳了"), ("assistant", "游得开心吗")]:
+        await archive.add_message(pool, user_a, role, text, now=NOW)
+    m = FakeModel([LLMError("bad_request", "This model's maximum context length is 8192 tokens"), "",
+                   "TA 说自己对芒果过敏，吃了嘴唇会肿，我答应以后不给 TA 推荐芒果。", "晚安呀"])
+    ev = await turn(make_deps(pool, m), user_a, "晚安")
+    assert not of(ev, "error") and of(ev, "bubble")
+    retry = m.requests[-1]
+    assert not any("芒果" in x.text for x in retry.messages) and "芒果过敏" in retry.system[1].text
+
+
+async def test_too_long_twice_says_so(pool, user_a, monkeypatch):
+    monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
+    for role, text in [("user", "我对芒果过敏，吃了嘴唇会肿"), ("assistant", "好的，以后不给你推荐芒果")]:
+        await archive.add_message(pool, user_a, role, text, now=NOW)
+    too_long = LLMError("bad_request", "prompt is too long")
+    m = FakeModel([too_long, "", "TA 说自己对芒果过敏，吃了嘴唇会肿，我答应以后不给 TA 推荐芒果。", too_long])
+    ev = await turn(make_deps(pool, m), user_a, "晚安")
+    assert of(ev, "error")[0]["kind"] == "too_long" and "再发一次" in of(ev, "error")[0]["message"]
+
+
+def test_context_full_reads_the_usual_wordings():
+    from llm.errors import context_full
+    assert context_full(LLMError("bad_request", "Error: context_length_exceeded"))
+    assert context_full(LLMError("other", "请求的上下文长度超过模型限制"))
+    assert context_full(LLMError("bad_request", "", status=413))
+    assert not context_full(LLMError("bad_request", "invalid tool schema"))
+    assert not context_full(LLMError("balance", "token limit reached for this month"))

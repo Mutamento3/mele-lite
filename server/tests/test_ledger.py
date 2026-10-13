@@ -209,3 +209,14 @@ def test_estimated_prompt_when_relay_reports_no_usage():
     assert 2 <= estimate_tokens("hello world") <= 4
     req = ChatRequest(model="m", system=[Block("规" * 30_000)], messages=[Msg("user", "话" * 31_000)])
     assert needs_roll(req.estimated_prompt(), 60_000)
+
+
+def test_backlog_batches_only_when_far_over_and_cut_before_user(monkeypatch):
+    monkeypatch.setattr(ledger, "BACKLOG_CHARS", 30)
+    monkeypatch.setattr(ledger, "BATCH_CHARS", 8)
+    monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
+    msgs = convo(10)                                                     # 每条 3～4 字，共 31 字
+    assert ledger.backlog_batches(msgs, high_water=100) == []            # 记性长度调得长：线跟着抬
+    got = ledger.backlog_batches(msgs, high_water=1)
+    assert [[m.id for m in b] for b in got] == [[1, 2, 3, 4]]            # 切在用户开口前，剩下的不超线就停
+    assert ledger.backlog_batches(convo(4), high_water=1) == []

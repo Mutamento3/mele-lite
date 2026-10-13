@@ -94,6 +94,36 @@ enum LocalEcho {
         }
     }
 
+    /// 积压的线（跟 Host ledger.BACKLOG_CHARS 一样）：没卷的原文超过这么多字、也超过记性长度两倍，才算积压。平常碰不到
+    static let backlogChars = 150_000
+
+    static func backlogged(_ s: LocalStore, conversation conv: String, settings: [String: Any]) -> Bool {
+        let upto = rolledUpto(s, conv)
+        let chars = s.messages(conv).reduce(0) { sum, m in
+            (m["id"] as? Int ?? 0) > upto ? sum + (m["text"] as? String ?? "").count : sum
+        }
+        return chars > max(backlogChars, 2 * highWater(settings))
+    }
+
+    /// 当场等它卷完（积压、装不下时用）；后台已经在卷了就不重复。返回真的卷了没有
+    @discardableResult
+    static func rollNow(_ host: LocalHost, conversation conv: String) async -> Bool {
+        guard busyLock.withLock({ busy.insert(conv).inserted }) else { return false }
+        defer { _ = busyLock.withLock { busy.remove(conv) } }
+        let before = rolledUpto(host.store, conv)
+        await roll(host, conversation: conv)
+        return rolledUpto(host.store, conv) > before
+    }
+
+    /// 这次是因为上下文太长被打回的（各家说法跟 Host llm/errors.py 的 context_full 同一份）
+    static func tooLong(_ error: Error) -> Bool {
+        guard case .server(let msg) = error as? LLMError else { return false }
+        let m = msg.lowercased()
+        return m.hasPrefix("http 413") || ["context_length", "context length", "maximum context", "context window", "too many tokens",
+                                            "prompt is too long", "input is too long", "reduce the length", "token limit", "上下文"]
+            .contains { m.contains($0) }
+    }
+
     struct Msg {
         let id: Int; let role: String; let text: String; let at: Date
         /// 群里这句是谁说的（名字）；私聊 nil = 按 role 写「我」/ 对方

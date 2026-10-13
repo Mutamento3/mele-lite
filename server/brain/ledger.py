@@ -117,6 +117,36 @@ def plan_roll(msgs: list[StoredMsg], keep_count: int | None = None, keep_chars: 
     return RollPlan(rolled=msgs[:start], kept=msgs[start:])
 
 
+# 积压（10-13 内测：中转不回 usage 的老版本，一个窗口积了 3000 多条没卷）：没卷的原文超过这么多字，开口前先分批卷。
+# 平常卷账本时没卷的远到不了这个数，只有积压才会碰上；用户把记性长度调得很长时线跟着往上抬。
+BACKLOG_CHARS = 150_000
+BATCH_CHARS = 40_000             # 一批多少字：挑记忆那一步只看这一批，请求大小有上限
+
+
+def backlog_batches(msgs: list[StoredMsg], high_water: int) -> list[list[StoredMsg]]:
+    """积压太多时从最老的切成一批批（每批约 BATCH_CHARS 字、切在用户开口前），切到剩下的不超线为止；
+    最后那一来一回（plan_roll 留下的）不动。没超线返回空——平常一批都没有。"""
+    limit = max(BACKLOG_CHARS, 2 * high_water)
+    total = sum(len(m.text) for m in msgs)
+    if total <= limit:
+        return []
+    batches: list[list[StoredMsg]] = []
+    cur: list[StoredMsg] = []
+    chars = 0
+    for m in plan_roll(msgs).rolled:
+        if cur and chars >= BATCH_CHARS and m.role in USER_SIDE:
+            batches.append(cur)
+            total -= chars
+            cur, chars = [], 0
+            if total <= limit:
+                return batches
+        cur.append(m)
+        chars += len(m.text)
+    if cur:
+        batches.append(cur)
+    return batches
+
+
 def voice_samples(rolled: list[StoredMsg]) -> list[str]:
     """去掉长得像的、从头到尾散着挑（10-13：原来取最后 6 句，恰是重复最凶的几句，DeepSeek 照抄一整轮）"""
     from .repeats import pick_samples

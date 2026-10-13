@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 import memory as M
 from llm.catalog import DEFAULT_HIGH_WATER, cost, lookup, sees_images
-from llm.errors import LLMError
+from llm.errors import LLMError, context_full
 from llm.router import Route, call, make_adapter
 from llm.types import ChatRequest, ImagePart, Msg, ToolRound, Usage
 
@@ -61,6 +61,7 @@ USER_ERRORS = {
            "overloaded": "模型那边太忙了，等一会儿再试。",
            "network": "连不上模型，检查一下网络。",
            "bad_request": "这次请求被模型拒了，稍后再试试。",
+           "too_long": "这段聊天太长，模型装不下了。前面的已经卷进账本，再发一次就好。",
            "other": "模型那边出了点问题，稍后再试。",
            "trial_over": "今天的免费额度用完啦，明早 5 点会补一些。加一个自己的 key，或者成为会员，就不用等——之前聊的、我记下的都还在。"},
     "en": {"auth": "The model key doesn't seem right — check it in Settings.",
@@ -70,6 +71,7 @@ USER_ERRORS = {
            "overloaded": "The model is busy right now. Try again in a moment.",
            "network": "Can't reach the model — check the connection.",
            "bad_request": "The model rejected this request. Try again later.",
+           "too_long": "This chat got too long for the model. The earlier part is now in the ledger — send it again.",
            "other": "Something went wrong on the model's side. Try again later.",
            "trial_over": "Today's free allowance is used up — a little more comes back at 5 am. Add your own key or become a member to skip the wait — everything we said and everything I remembered is still here."},
 }
@@ -397,6 +399,12 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     adapter = get_adapter(deps, route)
     # 免费额度按这一轮真花的钱扣（连同哨兵、判读、看图、卷账本）：开始前记下今天的总花费，结束时算差
     trial_mark = (await archive.usage_on(pool, acc, day))["cost_usd"] if route.trial and not free_trial else None
+    if group is None:                 # 积压太多先分批卷（10-13 内测）；平常这一步什么都不做
+        info = lookup(route.chat_model)
+        rolled_now = await catch_up(deps, scope, route, adapter, settings, state, day, emit,
+                                    settings.memory_length or (info.high_water if info else DEFAULT_HIGH_WATER))
+        if rolled_now:
+            history = [m for m in history if m.id not in rolled_now]
     images: tuple = ()
     if sent:                          # TA 这一轮发了图：先写好描述，会看图的模型这一轮另外看原图
         for f in sent:
@@ -538,9 +546,32 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                       tz=settings.tz,
                       names=names, deps=deps, mcp=outside.route)
     started = time.monotonic()                   # 「思考了 x 秒」：从开口到说完（含中间调工具）
+    out, err = None, None
     try:
         out = await tool_loop(adapter, req, ctx, emit, lang)
     except LLMError as e:
+        err = e
+    if err is not None and context_full(err):
+        # 装不下了（模型窗口比记性长度小、或者积压，10-14）：卷账本只在一轮成功之后，不先卷就会每句都报这个错。
+        # 先把前面卷进账本；私聊接着用短了的历史再试一次，群里让 TA 再发一次
+        log.warning("context too long, rolling before retry: %s", err.message[:300])
+        rolled = await roll(deps, scope, route, adapter, settings, state, parts, day, emit, state_key=state_key, group=group)
+        if rolled and group is None:
+            left = {m.id for m in await archive.unrolled(pool, conv)}
+            history = [m for m in history if m.id < 0 or m.id in left]
+            hist, _ = history_msgs(history, lang)
+            parts = replace(parts, history=squash(hist) if merged_rooms else hist,
+                            ledger=ledger.render_ledger(await archive.get_ledger(pool, conv), state.get("voice_samples", []),
+                                                        lang, settings.user_name))
+            req = build_request(parts, model=route.chat_model, thinking=mode == "native", user_tag=user_tag(acc), lang=lang)
+            try:
+                out, err = await tool_loop(adapter, req, ctx, emit, lang), None
+            except LLMError as e:
+                err = e
+        if err is not None and rolled:
+            err = LLMError("too_long", err.message, status=err.status)
+    if err is not None:
+        e = err
         await emit({"type": "error", "kind": e.kind,
                     "message": USER_ERRORS[lang].get(e.kind, USER_ERRORS[lang]["other"])})
         await archive.log_turn(pool, conv, {"turn": turn_no, "error": e.kind, "detail": e.message[:500],
@@ -647,18 +678,35 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     return TurnOutcome(bool(out.text.strip()), usd or 0.0)
 
 
+async def catch_up(deps: Deps, scope: Scope, route: Route, adapter, settings: Settings, state: dict,
+                   day: date, emit: Emit, high_water: int) -> set[int]:
+    """积压太多（中转不回 usage 的老版本积下的几千条）：开口前先分批卷，不然这一轮整段发出去，
+    装不下就报错、永远轮不到卷。每批挑记忆只看这一批。返回卷掉了哪些 id；平常什么都不做。"""
+    msgs = await archive.unrolled(deps.pool, scope.conversation)
+    done: set[int] = set()
+    base = ("你在翻你和 TA 以前的聊天，挑出值得长期记住的事。" if settings.lang == "zh"
+            else "You are going through your earlier chats with them to keep what is worth remembering.")
+    bare = ContextParts(tools=tool_specs(incognito=scope.incognito), base=base, ledger="", history=[], volatile="", user_text="")
+    for batch in ledger.backlog_batches(msgs, high_water):
+        if not await roll(deps, scope, route, adapter, settings, state, bare, day, emit, batch=batch):
+            break                       # 写不动先停，这一轮照常聊，下一轮再接着卷
+        done |= {m.id for m in batch}
+    return done
+
+
 async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settings, state: dict,
                parts: ContextParts, day: date, emit: Emit, *, state_key: UUID | None = None,
-               group: GroupCtx | None = None) -> None:
+               group: GroupCtx | None = None, batch: list | None = None) -> bool:
     """卷账本：① 主模型先挑要长期记的（前缀跟刚才那轮一样，几乎全走缓存）② 便宜模型按天写新账
     ③ 超了天龄配额的天单独压 ④ 丢掉 14 天以前的、标记已卷、留腔调样本。
     写账失败：原文先留着，下一轮再试；连续失败提醒用户。账本只在这里动，平时不动，缓存不会无故作废。"""
     pool = deps.pool
     lang = settings.lang
-    msgs = await archive.unrolled(pool, scope.conversation)
-    plan = ledger.plan_roll(msgs)
+    # batch = 积压时的一批（catch_up）：整批卷掉，挑记忆也只看这一批
+    msgs = batch if batch is not None else await archive.unrolled(pool, scope.conversation)
+    plan = ledger.RollPlan(rolled=batch, kept=[]) if batch is not None else ledger.plan_roll(msgs)
     if not plan.rolled:
-        return
+        return False
     await emit({"type": "ledger", "status": "rolling", "count": len(plan.rolled)})
 
     pick_hist, pick_note = history_msgs(await files.decorate(pool, msgs, lang), lang)
@@ -710,7 +758,7 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
         if state["ledger_fails"] >= LEDGER_FAIL_WARN:
             await emit({"type": "notice", "text": LEDGER_NOTICE[lang]})
         await emit({"type": "ledger", "status": "failed"})
-        return
+        return False
 
     # ② 压旧天：超了天龄配额的天单独压；压不动先留着，下次卷的时候再试
     for d, age, quota in ledger.over_quota(days, today, lang):
@@ -732,3 +780,4 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
     state["lore_seen"] = {}              # 世界书也清零：递过的那几轮卷走了
     await archive.save_state(pool, state_key, state)
     await emit({"type": "ledger", "status": "done", "count": len(plan.rolled)})
+    return True

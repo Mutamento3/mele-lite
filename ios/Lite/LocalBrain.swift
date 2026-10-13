@@ -397,6 +397,10 @@ final class LocalBrain: @unchecked Sendable {
         var provider = routed
         if monologue { provider.thinking = false }
 
+        // 积压（10-13 内测：中转不报用量的老版本积了几千条没卷）：先卷了再聊，不然这一轮整段发出去，装不下就报错、永远轮不到卷
+        if group == nil, LocalEcho.backlogged(host.store, conversation: conv, settings: settings) {
+            await LocalEcho.rollNow(host, conversation: conv)
+        }
         // 回声（10-04）：卷进账本的那些不再原样进上下文，账本放 system 里
         let rolledUpto = LocalEcho.rolledUpto(host.store, conv)
         var stored = host.store.messages(conv).filter { ($0["id"] as? Int ?? 0) > rolledUpto }
@@ -676,6 +680,13 @@ final class LocalBrain: @unchecked Sendable {
                 req.turns.append(ChatTurn(role: .user, text: "", toolResults: results))
             }
         } catch {
+            // 装不下了（模型窗口比记性长度小，10-14）：卷账本只在一轮成功之后，不先卷就每句都报这个错。先卷，再请 TA 重发
+            if group == nil, LocalEcho.tooLong(error), await LocalEcho.rollNow(host, conversation: conv) {
+                say(["type": "error", "kind": "llm", "message": zh ? "这段聊天太长，模型装不下了。前面的已经卷进账本，再发一次就好。"
+                                                                  : "This chat got too long for the model. The earlier part is now in the ledger — send it again."])
+                say(["type": "done"])
+                return false
+            }
             say(["type": "error", "kind": "llm", "message": Self.say(error as? LLMError ?? .network, zh: zh)])
             say(["type": "done"])
             return false

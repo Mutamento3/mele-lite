@@ -30,3 +30,13 @@ def from_status(status: int, message: str = "") -> LLMError:
     if status in (400, 413, 422):
         return LLMError("bad_request", message, status=status)
     return LLMError("other", message, status=status)
+
+
+# 「太长了，装不下」各家的说法（10-14）：模型窗口比记性长度小、或者积压太多时会碰上
+_TOO_LONG = ("context_length", "context length", "maximum context", "context window", "too many tokens",
+             "prompt is too long", "input is too long", "reduce the length", "token limit", "上下文")
+
+
+def context_full(e: LLMError) -> bool:
+    """这次是因为上下文太长被打回的（卷一下账本再试就能好）。"""
+    return e.status == 413 or (e.kind in ("bad_request", "other") and any(p in e.message.lower() for p in _TOO_LONG))

@@ -196,7 +196,7 @@ struct KeychainCard: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        guard !Lite.local else { return }      // 本机模式写账本就用聊天那个，没有后台模型这回事
+                        guard !Lite.local else { return }      // 本机模式换写账的模型走 TA 高级设定「回声用哪把钥匙」（echo_key_id）
                         ledgerDraft = k.ledgerModel ?? ""
                         editing = k
                     }
