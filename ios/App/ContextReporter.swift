@@ -225,8 +225,27 @@ final class ContextReporter: NSObject, ObservableObject, CLLocationManagerDelega
 
     // MARK: 步数和睡眠
 
+    /// 她这句话在问步数 / 睡眠 / 天气 / 在哪 / 日程（10-13 内测：聊到一半问「我昨晚睡了多久」，
+    /// 它手上没有这行，就编了句「防火墙很严密」）——发出去之前当场重读一遍，这一轮一定给它
+    nonisolated static let askPattern = try! NSRegularExpression(
+        pattern: "步数|走了多少|走路|睡|觉|失眠|天气|下雨|日程|行程|steps?|walk|sleep|slept|weather|calendar|schedule",
+        options: [.caseInsensitive])
+
+    nonisolated static func asks(_ text: String) -> Bool {
+        askPattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    func refreshForQuestion(_ text: String) async {
+        guard Self.asks(text) else { return }
+        for k in Kind.allCases where enabled.contains(k) { await report(k, force: true) }
+    }
+
     private func reportHealth() async {
         guard HKHealthStore.isHealthDataAvailable() else { return }
+        // 每次读之前问一遍（10-13）：已经答过的不会再弹；早先只问过步数、没问过睡眠的这次补问。
+        // 读权限被拒 iOS 不告诉 app，只会读出空——所以拒了的那样就是没有，不报
+        let types: Set<HKObjectType> = [HKQuantityType(.stepCount), HKCategoryType(.sleepAnalysis)]
+        try? await health.requestAuthorization(toShare: [], read: types)
         let cal = Calendar.current
         let now = Date()
         let steps = await sum(.stepCount, from: cal.startOfDay(for: now), to: now)
@@ -270,6 +289,19 @@ final class ContextReporter: NSObject, ObservableObject, CLLocationManagerDelega
                     else { if let c0 = cur { total += c0.1.timeIntervalSince(c0.0) }; cur = s }
                 }
                 if let c0 = cur { total += c0.1.timeIntervalSince(c0.0) }
+                // 没戴手表的只有「在床上」（iPhone 睡眠计划记的就是这个，10-13 内测读不到睡眠的真因之一）：
+                // 一段「睡着」都没有时，退回用在床上的时长
+                if total == 0 {
+                    let bed = (samples as? [HKCategorySample] ?? [])
+                        .filter { $0.value == HKCategoryValueSleepAnalysis.inBed.rawValue }
+                        .map { ($0.startDate, $0.endDate) }.sorted { $0.0 < $1.0 }
+                    var cur2: (Date, Date)?
+                    for s in bed {
+                        if let c0 = cur2, s.0 <= c0.1 { cur2 = (c0.0, max(c0.1, s.1)) }
+                        else { if let c0 = cur2 { total += c0.1.timeIntervalSince(c0.0) }; cur2 = s }
+                    }
+                    if let c0 = cur2 { total += c0.1.timeIntervalSince(c0.0) }
+                }
                 c.resume(returning: total / 3600)
             }
             health.execute(q)

@@ -154,7 +154,9 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
             req.messages[-1] = replace(last, text=f"{last.text}\n\n{MONO_ONLY_NOTE[lang]}")
             continue
         if not reply.tool_calls or round_no == max_rounds:
-            return LoopResult(said, "\n\n".join(thinking), total, used, reply.usage.prompt_total, notes, cards)
+            # 对方没报用量（有的中转不回 usage）就按字数估：不然水位永远是 0，账本永远不卷，越聊越贵（10-13 内测）
+            last_prompt = reply.usage.prompt_total or req.estimated_prompt()
+            return LoopResult(said, "\n\n".join(thinking), total, used, last_prompt, notes, cards)
         results = []
         for c in reply.tool_calls:
             before = len(ctx.cards)

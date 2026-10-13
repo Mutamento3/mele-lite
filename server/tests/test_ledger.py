@@ -200,3 +200,12 @@ async def test_new_name_on_old_ta_ledger_is_not_invention():
     f = FakeModel(["Mia 去游泳了，游了一千米，很开心。"])
     short, _ = await age_day(f, ["haiku"], old, D, 5, 100, name="Lumi", lang="zh", user_name="Mia")
     assert short == "Mia 去游泳了，游了一千米，很开心。"
+
+
+def test_estimated_prompt_when_relay_reports_no_usage():
+    """10-13 内测：中转不回 usage → 水位一直是 0、账本永远不卷。没报就按字数估，中文一个字一个、英文约 3 个字符一个。"""
+    from llm.types import Block, ChatRequest, Msg, estimate_tokens
+    assert estimate_tokens("你好世界") == 4
+    assert 2 <= estimate_tokens("hello world") <= 4
+    req = ChatRequest(model="m", system=[Block("规" * 30_000)], messages=[Msg("user", "话" * 31_000)])
+    assert needs_roll(req.estimated_prompt(), 60_000)

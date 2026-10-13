@@ -135,6 +135,7 @@ class KeyInfo:
     chat_model: str
     base_url: str | None
     last4: str
+    ledger_model: str | None = None   # 用户自己指定的后台模型（10-13）；None = 照清单
 
 
 def check_key_input(provider: str, api_key: str, chat_model: str) -> str:
@@ -150,12 +151,13 @@ def check_key_input(provider: str, api_key: str, chat_model: str) -> str:
 
 
 async def add_key(pool, box: KeyBox, account: UUID, *, provider: str, api_key: str, chat_model: str,
-                  base_url: str | None = None) -> UUID:
+                  base_url: str | None = None, ledger_model: str | None = None) -> UUID:
     api_key = check_key_input(provider, api_key, chat_model)
     kid = uuid.uuid4()
     await pool.execute(
-        "INSERT INTO keyring (id, account_id, provider, chat_model, base_url, secret, last4) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        kid, account, provider, chat_model, base_url, box.lock(api_key), api_key[-4:])
+        "INSERT INTO keyring (id, account_id, provider, chat_model, base_url, secret, last4, ledger_model) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        kid, account, provider, chat_model, base_url, box.lock(api_key), api_key[-4:], _model_or_none(ledger_model))
     await pool.execute("UPDATE accounts SET plan = 'byok' WHERE id = $1 AND plan = 'trial'", account)
     return kid
 
@@ -179,9 +181,22 @@ async def voice_key(pool, box: KeyBox, account: UUID) -> str | None:
 
 
 async def list_keys(pool, account: UUID) -> list[KeyInfo]:
-    rows = await pool.fetch("SELECT id, provider, chat_model, base_url, last4 FROM keyring WHERE account_id = $1 "
+    rows = await pool.fetch("SELECT id, provider, chat_model, base_url, last4, ledger_model FROM keyring WHERE account_id = $1 "
                             "ORDER BY created_at", account)
     return [KeyInfo(**dict(r)) for r in rows]
+
+
+def _model_or_none(name: str | None) -> str | None:
+    name = (name or "").strip()
+    return name or None
+
+
+async def set_ledger_model(pool, account: UUID, key_id: UUID, ledger_model: str | None) -> bool:
+    """改一把钥匙的后台模型（不用删了重加，联系人绑着的钥匙不动）；空 = 回到照清单。
+    不试打：写账失败本来就会换聊天那个模型兜底，填错了只是多花点，不会卡住。"""
+    done = await pool.execute("UPDATE keyring SET ledger_model = $3 WHERE id = $1 AND account_id = $2 "
+                              "AND provider <> 'elevenlabs'", key_id, account, _model_or_none(ledger_model))
+    return done.endswith("1")
 
 
 async def delete_key(pool, account: UUID, key_id: UUID) -> bool:
@@ -214,9 +229,10 @@ class DbKeys:
                WHERE c.id = $1 AND c.account_id = $2""", scope.companion, scope.account)
         if row is not None:
             info = lookup(row["chat_model"])
+            mine = row["ledger_model"]          # 用户自己指定的后台模型（10-13 内测）：写账、压旧天都用它，压不动照样换聊天那个兜底
             return Route(provider=row["provider"], api_key=self.box.unlock(row["secret"]), chat_model=row["chat_model"],
-                         ledger_model=info.ledger_model if info else row["chat_model"], base_url=row["base_url"],
-                         age_model=info.age_model if info else None)
+                         ledger_model=mine or (info.ledger_model if info else row["chat_model"]), base_url=row["base_url"],
+                         age_model=mine or (info.age_model if info else None))
         if self.trial is None:
             raise TrialOver()
         tz = (await archive.get_settings(self.pool, scope.companion)).get("tz") or "UTC"

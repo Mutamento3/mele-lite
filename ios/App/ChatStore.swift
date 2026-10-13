@@ -399,7 +399,11 @@ final class ChatStore: ObservableObject {
         typing = true                    // 她一发出去对面就「正在输入」（之前自用的 App那样），不等服务器那十秒
         rebuild()
         ContextReporter.shared.reportMusicNow(onlyPlaying: true)   // 耳朵：在放歌就报一下放到哪（服务器等十秒才回，来得及）
-        Task { await post(echo) }
+        // 问到步数 / 睡眠 / 天气这些：先当场重读手机那边，再发（10-13）
+        Task {
+            await ContextReporter.shared.refreshForQuestion(trimmed)
+            await post(echo)
+        }
         armWatchdog()
     }
 

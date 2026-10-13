@@ -125,7 +125,7 @@ async def put_profile(body: dict = Body(...), acc: UUID = Depends(account), a: A
 
 def _key(k: auth.KeyInfo) -> dict:
     return {"id": str(k.id), "provider": k.provider, "chat_model": k.chat_model, "base_url": k.base_url,
-            "last4": k.last4}
+            "last4": k.last4, "ledger_model": k.ledger_model}
 
 
 @router.get("/keys")
@@ -145,10 +145,19 @@ async def add_key(body: dict = Body(...), acc: UUID = Depends(account), a: Api =
         kid = await auth.add_key(a.deps.pool, a.cfg.box, acc, provider=str(body.get("provider") or ""),
                                  api_key=str(body.get("api_key") or ""),
                                  chat_model=str(body.get("chat_model") or "").strip(),
-                                 base_url=(str(body["base_url"]).strip() or None) if body.get("base_url") else None)
+                                 base_url=(str(body["base_url"]).strip() or None) if body.get("base_url") else None,
+                                 ledger_model=str(body.get("ledger_model") or ""))
     except auth.AuthError as e:
         raise _bad(e) from e
     return next(_key(k) for k in await auth.list_keys(a.deps.pool, acc) if k.id == kid)
+
+
+@router.patch("/keys/{key_id}")
+async def patch_key(key_id: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """现在只改后台模型（ledger_model，空 = 照清单）。"""
+    if not await auth.set_ledger_model(a.deps.pool, acc, key_id, str(body.get("ledger_model") or "")):
+        raise HTTPException(404, "没有这把钥匙")
+    return next(_key(k) for k in await auth.list_keys(a.deps.pool, acc) if k.id == key_id)
 
 
 @router.delete("/keys/{key_id}", status_code=204)

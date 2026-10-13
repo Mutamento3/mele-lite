@@ -81,6 +81,19 @@ class ChatRequest:
     thinking: bool = False
     user_tag: str = ""           # 固定的用户标记（哈希）：同一个人的请求尽量落在同一处
 
+    def estimated_prompt(self) -> int:
+        """对方没报用量时（有的兼容中转不回 usage）按字数估这次上下文多大，好让账本照样到点就卷（10-13 内测）。"""
+        parts = [b.text for b in self.system] + [m.text for m in self.messages]
+        parts += [t.name + t.description + str(t.params) for t in self.tools]
+        parts += [r for rd in self.rounds for r in rd.results]
+        return sum(estimate_tokens(p) for p in parts)
+
+
+def estimate_tokens(text: str) -> int:
+    """粗估 token：中日韩一个字算一个，别的大约 3 个字符一个（宁可估高一点，别估低到永远卷不动）。"""
+    wide = sum(1 for ch in text if ord(ch) >= 0x2E80)
+    return wide + (len(text) - wide + 2) // 3
+
 
 @dataclass
 class Reply:

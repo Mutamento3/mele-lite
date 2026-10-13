@@ -22,14 +22,15 @@ enum LocalContext {
     }
 
     /// 这一轮要不要给、给的话是哪一行（给了就记下这个窗口给过）
-    static func line(_ s: LocalStore, conversation: String, zh: Bool, now: Date = Date()) -> String {
+    /// force：她这句在问这些（ContextReporter.asks），隔多久都给（10-13）
+    static func line(_ s: LocalStore, conversation: String, zh: Bool, force: Bool = false, now: Date = Date()) -> String {
         let items = fresh(s, now: now)
         let text = render(items, now: now, zh: zh)
         guard !text.isEmpty else { return "" }
         var shown = s.read(shownFile) as? [String: Any] ?? [:]
         let last = shown[conversation] as? [String: Any]
         let key = placeKey(items)
-        if let last, now.timeIntervalSince(LocalStore.date(last["at"])) < reshow, last["key"] as? String == key { return "" }
+        if !force, let last, now.timeIntervalSince(LocalStore.date(last["at"])) < reshow, last["key"] as? String == key { return "" }
         shown[conversation] = ["at": LocalStore.iso(now), "key": key]
         s.write(shownFile, shown)
         return text

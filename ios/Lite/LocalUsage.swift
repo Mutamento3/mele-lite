@@ -43,12 +43,24 @@ enum LocalUsage {
     }
 
     /// 水位：这一轮聊天（第一次调用，没算工具来回）实际喂了多少，聊天记录多少字，整份多少字
-    static func noteTurn(_ s: LocalStore, conversation: String, usage: Usage, req: ChatRequest) {
+    /// 对方没报用量（有的兼容中转不回 usage）就按字数估（10-13 内测：水位一直是 0，账本永远不卷，越聊越贵）
+    static func noteTurn(_ s: LocalStore, conversation: String, usage: Usage?, req: ChatRequest) {
         guard var c = s.conversation(conversation) else { return }
         let all = s.messages(conversation).reduce(0) { $0 + ($1["text"] as? String ?? "").count }
         let sent = req.system.count + req.context.count + req.turns.reduce(0) { $0 + $1.text.count }
-        c["gauge"] = ["tokens": usage.prompt, "chars_sent": max(1, sent), "history_chars": all, "at": LocalStore.iso(Date())]
+        let reported = usage?.prompt ?? 0
+        let tokens = reported > 0 ? reported : estimateTokens([req.system, req.context] + req.turns.map(\.text))
+        c["gauge"] = ["tokens": tokens, "chars_sent": max(1, sent), "history_chars": all, "at": LocalStore.iso(Date())]
         s.saveConversation(c)
+    }
+
+    /// 粗估 token：中日韩一个字算一个，别的约 3 个字符一个（跟 Host 的 estimate_tokens 一样，宁可估高）
+    static func estimateTokens(_ parts: [String]) -> Int {
+        parts.reduce(0) { sum, text in
+            let scalars = text.unicodeScalars
+            let wide = scalars.filter { $0.value >= 0x2E80 }.count
+            return sum + wide + (scalars.count - wide + 2) / 3
+        }
     }
 
     static func handle(_ r: LocalRequest, host: LocalHost) -> LocalResponse? {

@@ -161,6 +161,8 @@ struct KeychainCard: View {
     @State private var keys: [KeyDTO] = []
     @State private var adding = false
     @State private var deleting: KeyDTO?
+    @State private var editing: KeyDTO?          // 改后台模型（10-13 内测）
+    @State private var ledgerDraft = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -188,6 +190,15 @@ struct KeychainCard: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(Self.providerName(k.provider)) · \(k.chatModel)").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
                         Text("••••\(k.last4)").font(Typo.number(Typo.Size.caption, .regular)).foregroundStyle(theme.inkFaint)
+                        if !Lite.local, let lm = k.ledgerModel, !lm.isEmpty {
+                            Text("后台：\(lm)").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard !Lite.local else { return }      // 本机模式写账本就用聊天那个，没有后台模型这回事
+                        ledgerDraft = k.ledgerModel ?? ""
+                        editing = k
                     }
                     Spacer()
                     Button { deleting = k } label: {
@@ -220,6 +231,20 @@ struct KeychainCard: View {
                 deleting = nil
             }
         } message: { Text("用它的联系人会回到免费额度。") }
+        .alert("后台模型", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
+            TextField("比如 gpt-5-mini（可不填）", text: $ledgerDraft)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("存") {
+                if let k = editing {
+                    let v = ledgerDraft.trimmingCharacters(in: .whitespaces)
+                    Task { let _: KeyDTO? = try? await model.api.call("PATCH", "keys/\(k.id)", json: ["ledger_model": v]); await load() }
+                }
+                editing = nil
+            }
+            Button("取消", role: .cancel) { editing = nil }
+        } message: {
+            Text("写账本、压旧天这些后台活用哪个模型（同一把 key 能用的）。不填：模型清单里有的用同一家便宜的，没有的就用聊天那个。")
+        }
     }
 
     private func load() async {
@@ -253,6 +278,7 @@ struct AddKeyView: View {
     @State private var baseURL = ""
     @State private var models: [ModelDTO] = []
     @State private var customModel = ""
+    @State private var ledgerModel = ""          // 后台模型（可不填，10-13 内测）
     @State private var trying = false
     @State private var error: String?
     @State private var fetched: [String] = []       // 兼容 OpenAI：从 /v1/models 拉到的模型
@@ -309,6 +335,15 @@ struct AddKeyView: View {
                     Text(pickedModels.count > 1
                          ? String(format: String(localized: "会存成 %d 把钥匙（同一个 key，各配一个模型），联系人那边各挑各的。"), pickedModels.count)
                          : String(localized: "可以多选：选几个就存几把钥匙（同一个 key，各配一个模型）。列表里没有的，拉一下或者手填。"))
+                }
+
+                if !Lite.local {
+                    Section {
+                        TextField("模型名（可不填）", text: $ledgerModel)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    } header: { Text("后台模型") } footer: {
+                        Text("写账本、压旧天这些后台活用哪个，填同一把 key 能用的便宜模型就好。不填：清单里有的用同一家便宜的，没有的就用聊天那个。之后点钥匙那行也能改。")
+                    }
                 }
 
                 if let error {
@@ -424,6 +459,8 @@ struct AddKeyView: View {
             var body: [String: Any] = ["provider": provider, "api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
                                        "chat_model": m]
             if provider == "openai-compatible" { body["base_url"] = baseURL.trimmingCharacters(in: .whitespaces) }
+            let lm = ledgerModel.trimmingCharacters(in: .whitespaces)
+            if !Lite.local, !lm.isEmpty { body["ledger_model"] = lm }
             do {
                 let k: KeyDTO = try await model.api.call("POST", "keys", json: body)
                 if first == nil { first = k.id }

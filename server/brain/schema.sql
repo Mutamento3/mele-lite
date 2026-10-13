@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS keyring (                -- 钥匙串：用户的 key
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS trial_micro BIGINT;   -- 免费额度剩多少（微美元）；NULL = 还没发过礼包（09-28）
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS trial_day DATE;        -- 上次按天补的那天（用户时区、早上 5 点换日）
 ALTER TABLE companions ADD COLUMN IF NOT EXISTS key_id UUID REFERENCES keyring(id) ON DELETE SET NULL;
+ALTER TABLE keyring ADD COLUMN IF NOT EXISTS ledger_model TEXT;   -- 后台模型（写账本、压旧天）；空 = 照模型清单，清单里没有就用聊天那个（10-13 内测）
 
 CREATE TABLE IF NOT EXISTS trial_devices (          -- 一台手机只给一次试用（存设备标记的哈希）
   device_hash TEXT        PRIMARY KEY,

@@ -165,7 +165,8 @@ struct KeyDTO: Decodable, Identifiable, Hashable {
     let provider: String
     let chatModel: String
     let last4: String
-    enum CodingKeys: String, CodingKey { case id, provider, last4; case chatModel = "chat_model" }
+    var ledgerModel: String? = nil      // 后台模型（写账本、压旧天，10-13）；空 = 照清单
+    enum CodingKeys: String, CodingKey { case id, provider, last4; case chatModel = "chat_model"; case ledgerModel = "ledger_model" }
 }
 
 struct TraitDTO: Decodable, Identifiable, Hashable {

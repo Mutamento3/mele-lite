@@ -497,7 +497,9 @@ final class LocalBrain: @unchecked Sendable {
         }
         // 〔TA 那边〕天气 / 在哪 / 日程 / 步数和睡眠（10-04）：小号不给（那是平常的你那边）
         if altInfo == nil {
-            let side = LocalContext.line(host.store, conversation: conv, zh: zh)
+            let askedText = host.store.messages(conv).last { ($0["role"] as? String) == "user" }?["text"] as? String ?? ""
+            let side = LocalContext.line(host.store, conversation: conv, zh: zh,
+                                         force: ContextReporter.asks(askedText))
             if !side.isEmpty { req.context += "\n\n" + side }
         }
         // 〔现在〕它自己此刻在哪、在干嘛（它的一天；小号窗口也给——那是它自己的日子）
@@ -630,7 +632,7 @@ final class LocalBrain: @unchecked Sendable {
                     case .toolCall(let c): calls.append(c)
                     case .assistantRaw(let r): raw = r
                     case .done(let u):                         // 水位：只记这一轮第一次（没算工具来回）
-                        if let u, !gaugeNoted { gaugeNoted = true; LocalUsage.noteTurn(host.store, conversation: conv, usage: u, req: req) }
+                        if !gaugeNoted { gaugeNoted = true; LocalUsage.noteTurn(host.store, conversation: conv, usage: u, req: req) }
                     }
                 }
                 if let p = req.assistantPrefix, !said.isEmpty { said = p + said }      // 补叫时替它填好的开头，接回去

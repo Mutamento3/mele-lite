@@ -107,3 +107,25 @@ async def test_one_trial_per_phone(pool):
     assert await auth.claim_trial_device(pool, a, "device-1", secret=SECRET) is True           # 自己再来没事
     assert await auth.claim_trial_device(pool, b, "device-1", secret=SECRET) is False
     assert await pool.fetchval("SELECT trial_left FROM accounts WHERE id = $1", b) == 0
+
+
+async def test_own_ledger_model_wins_over_catalog(pool):
+    """10-13 内测：清单外的模型（中转站的 GPT）写账本、压旧天都用聊天那个；用户填了后台模型就用填的，清空回到照清单。"""
+    box = auth.KeyBox(Fernet.generate_key())
+    a = await auth.new_account(pool)
+    comp = (await accounts.list_companions(pool, a))[0]
+    conv = (await accounts.list_conversations(pool, a, comp))[0].id
+    kid = await auth.add_key(pool, box, a, provider="openai-compatible", api_key="sk-abcdefgh1234",
+                             chat_model="some-relay-model", base_url="https://relay.example/v1")
+    await auth.use_key(pool, a, comp, kid)
+    keys = auth.DbKeys(pool, box, None)
+    r = await keys.route_for_scope(Scope(a, comp, conv))
+    assert (r.ledger_model, r.age_model) == ("some-relay-model", None)
+    assert await auth.set_ledger_model(pool, a, kid, "  gpt-mini  ")
+    r = await keys.route_for_scope(Scope(a, comp, conv))
+    assert (r.chat_model, r.ledger_model, r.age_model) == ("some-relay-model", "gpt-mini", "gpt-mini")
+    assert [k.ledger_model for k in await auth.list_keys(pool, a)] == ["gpt-mini"]
+    assert await auth.set_ledger_model(pool, a, kid, "")
+    assert (await keys.route_for_scope(Scope(a, comp, conv))).ledger_model == "some-relay-model"
+    b = await auth.new_account(pool)
+    assert not await auth.set_ledger_model(pool, b, kid, "x")          # 别人的钥匙改不了
