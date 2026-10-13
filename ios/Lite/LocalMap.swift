@@ -124,11 +124,46 @@ enum LocalMap {
         let name = place?["name"] as? String ?? ""
         let doing = n["doing"] as? String ?? ""
         guard !name.isEmpty else { return "" }
-        let rest = today(s, cid).filter { ($0["time"] as? String ?? "") > (n["time"] as? String ?? "") }
-            .prefix(2).map { "\($0["time"] as? String ?? "") \($0["doing"] as? String ?? "")" }.joined(separator: "；")
+        // 到这儿多久了 + 下一站（10-13 内测：一段「喝汤」排两小时，它没有钟，一上午每句都在喝汤；
+        // 给它时间，事情自然往前走；要挪地方有 go_to）
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let since = n["time"] as? String ?? ""
+        let mins = minutes(f.string(from: Date())) - minutes(since)
+        var clock = since.isEmpty || mins < 0 ? "" : (zh ? "\(since) 到这儿的，已经 \(elapsed(mins, zh: zh))" : "here since \(since), \(elapsed(mins, zh: zh)) so far")
+        if let next = today(s, cid).first(where: { ($0["time"] as? String ?? "") > since }) {
+            let nn = places(s, cid).first { ($0["id"] as? Int) == (next["place_id"] as? Int) }?["name"] as? String ?? ""
+            let nd = next["doing"] as? String ?? ""
+            clock += (clock.isEmpty ? "" : zh ? "；" : "; ")
+                + (zh ? "\(next["time"] as? String ?? "")去「\(nn)」\(nd.isEmpty ? "" : "，\(nd)")"
+                      : "\(next["time"] as? String ?? "") off to \"\(nn)\"\(nd.isEmpty ? "" : ", \(nd)")")
+        }
         return zh
-            ? "〔现在〕你在「\(name)」\(doing.isEmpty ? "" : "，\(doing)")。\(rest.isEmpty ? "" : "今天接下来：\(rest)。")照这个说，不用特意提。"
-            : "[Right now] You're at \"\(name)\"\(doing.isEmpty ? "" : ", \(doing)"). \(rest.isEmpty ? "" : "Later today: \(rest). ")Stay consistent with this; no need to announce it."
+            ? "〔现在〕你在「\(name)」\(doing.isEmpty ? "" : "，\(doing)")\(clock.isEmpty ? "" : "（\(clock)）")。这只是背景：不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。要挪地方——你自己想去哪，或 TA 说你在别处而你接受了——就用 go_to，不然下一句你还在这儿。"
+            : "[Right now] You're at \"\(name)\"\(doing.isEmpty ? "" : ", \(doing)")\(clock.isEmpty ? "" : " (\(clock))"). Background only: don't mention it every line, don't repeat what you just said; as time passes things naturally move on (done eating, on the way). To change place — you want to go somewhere, or they say you're elsewhere and you go with it — use go_to, or you'll still be here next line."
+    }
+
+    static func minutes(_ hm: String) -> Int {
+        let p = hm.split(separator: ":").compactMap { Int($0) }
+        return p.count == 2 ? p[0] * 60 + p[1] : -1
+    }
+
+    static func elapsed(_ mins: Int, zh: Bool) -> String {
+        let h = mins / 60, m = mins % 60
+        if zh { return h == 0 ? "\(m) 分钟" : m == 0 ? "\(h) 小时" : "\(h) 小时 \(m) 分" }
+        return h == 0 ? "\(m) min" : m == 0 ? "\(h) h" : "\(h) h \(m) min"
+    }
+
+    /// 它自己挪地方（go_to 工具，10-13）：今天行程里在此刻插一条（同一分钟的换掉），后面排好的照旧
+    static func move(_ s: LocalStore, _ cid: String, placeID: Int, doing: String) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let hm = f.string(from: Date())
+        let day = LocalRooms.today()
+        var items = today(s, cid).filter { ($0["time"] as? String) != hm }
+        items.append(["time": hm, "place_id": placeID, "doing": String(doing.prefix(30))])
+        items.sort { ($0["time"] as? String ?? "") < ($1["time"] as? String ?? "") }
+        var all = s.collection("days").filter { !(($0["companion_id"] as? String) == cid && ($0["day"] as? String) == day) }
+        all.append(["companion_id": cid, "day": day, "items": items])
+        s.saveCollection("days", all)
     }
 
     // MARK: 起世界、排一天（用你的 key）

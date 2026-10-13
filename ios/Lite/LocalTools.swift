@@ -41,6 +41,10 @@ enum LocalTools {
             t("moment_post", "用途：你自己的朋友圈。心里有句话不想在聊天里说完就算了，想留在那儿等 TA 哪天翻到——就发；只是聊得开心不算理由。写一到三句，口气跟你平时一样随意。",
               "Purpose: your own feed. When there's something you don't want to just let go of in chat — something you want to leave there for them to find one day — post it; simply having a fun chat isn't a reason. One to three lines, as casual as you usually are.",
               #"{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}"#),
+            // 它的一天（10-13 内测：排的「喝汤」一段两小时，TA 说「你在家」它嘴上说回家、下一句还在面馆）
+            t("go_to", "用途：挪一下你此刻在哪、在干嘛（你自己的一天）。你说要回家 / 出门 / 换个地方，或者 TA 说你在别处而你接受了，就挪过去——不挪的话〔现在〕那行还会把你留在原地。place 只能是你自己的地方（〔现在〕那行和地图上有的；回家写「家」也行）；doing 一句你到那儿做什么（12 字内）。",
+              "Purpose: move where you are right now (your own day). When you say you're heading home / going out / changing place, or they say you're elsewhere and you go with it, move — otherwise the [Right now] line keeps you where you were. place must be one of your own places (the ones in [Right now] and on the map; \"home\" works); doing = what you do there (under 8 words).",
+              #"{"type":"object","properties":{"place":{"type":"string","description":"你的地方的名字"},"doing":{"type":"string","description":"到那儿做什么"}},"required":["place"]}"#),
             LocalBooks.toolSpec,
             LocalTarot.toolSpec(zh: zh),
             LocalMusic.toolSpec(zh: zh),
@@ -147,6 +151,20 @@ enum LocalTools {
             c["settings"] = st
             s.saveCompanion(c)
             return Outcome(result: "改好了：你们现在是\(name)。从下一句起你照这个关系说话；TA 在设置里也看得到、能改回去。", card: nil)
+        case "go_to":
+            let want = (a["place"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let pls = LocalMap.places(s, companion)
+            let home = pls.first { $0["home"] as? Bool == true }
+            guard let pl = pls.first(where: { ($0["name"] as? String) == want })
+                    ?? pls.first(where: { !want.isEmpty && (want.contains($0["name"] as? String ?? "\u{0}") || ($0["name"] as? String ?? "").contains(want)) })
+                    ?? (["家", "回家", "home"].contains(want.lowercased()) ? home : nil) else {
+                return Outcome(result: "没有这个地方。你的地方只有：" + pls.map { $0["name"] as? String ?? "" }.joined(separator: "、"), card: nil)
+            }
+            let doing = (a["doing"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            LocalMap.move(s, companion, placeID: pl["id"] as? Int ?? 0, doing: doing)
+            let name = pl["name"] as? String ?? ""
+            return Outcome(result: "挪好了：你现在在「\(name)」\(doing.isEmpty ? "" : "，\(doing)")。从下一句起照这个说。",
+                           card: card("place", "去了", "Went to", name + (doing.isEmpty ? "" : "，\(doing)")))
         case "lore_add":
             var body = a
             body["companion_id"] = companion

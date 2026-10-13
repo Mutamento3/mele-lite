@@ -536,6 +536,7 @@ final class LocalBrain: @unchecked Sendable {
         // 人物卡 / 远事归记忆库时，手机那份工具收起来，免得两边都写
         let box = await host.mcp.toolbox(host, companion: comp, incognito: incognito)
         var hiding: Set<String> = []
+        if !LocalMap.lifeOn(host.store, cidNow) { hiding.insert("go_to") }       // 没有自己的一天就没地方可挪
         if box.memory != nil, LocalMCP.owner(settings, "memory_people") == "remote" { hiding.insert("person_save") }
         if box.memory != nil, LocalMCP.owner(settings, "memory_dates") == "remote" { hiding.insert("date_add") }
         if let group {

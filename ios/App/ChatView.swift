@@ -1939,6 +1939,7 @@ struct ActionCardChip: View {
         case "diary": return "book.pages"
         case "todo": return "checklist"
         case "moment": return "camera.aperture"
+        case "place": return "figure.walk"
         case "photo": return "photo.on.rectangle"
         case "book": return "books.vertical"
         case "wallet": return "wallet.pass"
