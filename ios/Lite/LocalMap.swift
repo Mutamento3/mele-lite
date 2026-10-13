@@ -129,14 +129,8 @@ enum LocalMap {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let since = n["time"] as? String ?? ""
         let mins = minutes(f.string(from: Date())) - minutes(since)
-        var clock = since.isEmpty || mins < 0 ? "" : (zh ? "\(since) 到这儿的，已经 \(elapsed(mins, zh: zh))" : "here since \(since), \(elapsed(mins, zh: zh)) so far")
-        if let next = today(s, cid).first(where: { ($0["time"] as? String ?? "") > since }) {
-            let nn = places(s, cid).first { ($0["id"] as? Int) == (next["place_id"] as? Int) }?["name"] as? String ?? ""
-            let nd = next["doing"] as? String ?? ""
-            clock += (clock.isEmpty ? "" : zh ? "；" : "; ")
-                + (zh ? "\(next["time"] as? String ?? "")去「\(nn)」\(nd.isEmpty ? "" : "，\(nd)")"
-                      : "\(next["time"] as? String ?? "") off to \"\(nn)\"\(nd.isEmpty ? "" : ", \(nd)")")
-        }
+        // 不给「接下来去哪」（10-13 内测第二张截图：它手里唯一「自己的事」就是下一站，撑话头时每轮都拿「等天黑去河边走走」出来）
+        let clock = since.isEmpty || mins < 0 ? "" : (zh ? "\(since) 到这儿的，已经 \(elapsed(mins, zh: zh))" : "here since \(since), \(elapsed(mins, zh: zh)) so far")
         return zh
             ? "〔现在〕你在「\(name)」\(doing.isEmpty ? "" : "，\(doing)")\(clock.isEmpty ? "" : "（\(clock)）")。这只是背景：不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。要挪地方——你自己想去哪，或 TA 说你在别处而你接受了——就用 go_to，不然下一句你还在这儿。"
             : "[Right now] You're at \"\(name)\"\(doing.isEmpty ? "" : ", \(doing)")\(clock.isEmpty ? "" : " (\(clock))"). Background only: don't mention it every line, don't repeat what you just said; as time passes things naturally move on (done eating, on the way). To change place — you want to go somewhere, or they say you're elsewhere and you go with it — use go_to, or you'll still be here next line."
