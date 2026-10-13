@@ -35,8 +35,53 @@ public enum ImportMemory {
         return out
     }
 
-    public static func pickPrompt(_ transcript: String, name: String, userName: String, zh: Bool) -> String {
+    /// 笔记 / 总结切块（10-13）：按空行分段攒到 size；一段本身超长就硬切
+    public static func notesChunks(_ text: String, size: Int = chunkSize) -> [String] {
+        var out: [String] = [], cur = ""
+        func flush() { if !cur.isEmpty { out.append(cur); cur = "" } }
+        for para in text.components(separatedBy: "\n\n").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where !para.isEmpty {
+            if para.count > size {
+                flush()
+                var rest = Substring(para)
+                while !rest.isEmpty { out.append(String(rest.prefix(size))); rest = rest.dropFirst(size) }
+                continue
+            }
+            if !cur.isEmpty && cur.count + 2 + para.count > size { flush() }
+            cur += (cur.isEmpty ? "" : "\n\n") + para
+        }
+        flush()
+        return out
+    }
+
+    public static func pickPrompt(_ transcript: String, name: String, userName: String, zh: Bool, notes: Bool = false) -> String {
         let user = userName.isEmpty ? (zh ? "TA" : "them") : userName
+        if notes {           // 不是聊天记录，是 TA 自己（或别的 AI 帮 TA）写的笔记 / 总结
+            return zh ? """
+            下面是\(user)自己写的一段笔记或总结（可能是别的 AI 帮\(user)整理的，里面说的「我」是\(user)自己）。挑出 0～5 件\(name)以后值得记住的事：\(user)的经历、喜好、身边的人、重要的时刻、\(user)和以前的 AI 之间说定的事。
+
+            - 每件一行，格式：- YYYY-MM-DD｜一句话（笔记里写了日期才写，没写就不写日期）
+            - 用第一人称写：\(name)写「我」，\(user)就写「\(user)」（笔记里的「我」要换成「\(user)」）
+            - 提到\(user)就写「\(user)」，不用「他」「她」
+            - 只写笔记里真有的，不猜、不补
+            - 没有值得记的就只写：（没有）
+
+            ⟪笔记开始⟫
+            \(transcript)
+            ⟪笔记结束⟫
+            """ : """
+            Below is a note or summary \(user) wrote (maybe with another AI's help; "I" in it means \(user)). Pick 0–5 things \(name) should remember: \(user)'s life, likes, people around them, important moments, things \(user) and their previous AI agreed on.
+
+            - One per line: - YYYY-MM-DD | one sentence (date only if the note gives one)
+            - First person: \(name) is "I"; \(user) is "\(user)" (turn the note's "I" into "\(user)")
+            - Refer to \(user) by name, not "he" or "she"
+            - Only what is in the note; no guessing
+            - If nothing is worth keeping, write only: (none)
+
+            ⟪note start⟫
+            \(transcript)
+            ⟪note end⟫
+            """
+        }
         if zh {
             return """
             下面是\(name)（文中的「我」）和\(user)以前的一段聊天记录。挑出 0～5 件以后还值得记住的事：\(user)的经历、喜好、身边的人、你们之间的约定、重要的时刻。
@@ -92,9 +137,13 @@ public enum ImportMemory {
         let limit = limit * 4 / 5        // 真包（10-05）：要 3000 它写到 3900+，跟模型要少一点，clipNotes 再兜底
         let items = picked.map { "- " + ($0.day.isEmpty ? "" : "\($0.day)｜") + $0.text }.joined(separator: "\n")
         let more = extra.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let lead = source == .notes
+            ? (zh ? "下面是从\(user)自己写的笔记里挑出来的事" : "Below are things picked from a note \(user) wrote")
+            : (zh ? "\(name)和\(user)以前在 \(app) 上聊过很久。下面是从那些聊天里挑出来的事\(more.isEmpty ? "" : "，还有 \(app) 当时记下的关于\(user)的笔记")"
+                  : "\(name) and \(user) talked for a long time on \(app). Below are things picked from those chats\(more.isEmpty ? "" : ", plus the notes \(app) kept about \(user)")")
         if zh {
             return """
-            \(name)和\(user)以前在 \(app) 上聊过很久。下面是从那些聊天里挑出来的事\(more.isEmpty ? "" : "，还有 \(app) 当时记下的关于\(user)的笔记")。把它们整理成一段 \(limit) 字以内的笔记，给\(name)以后翻：
+            \(lead)。把它们整理成一段 \(limit) 字以内的笔记，给\(name)以后翻：
 
             - 第一人称：\(name)写「我」，对方写「\(user)」；提到\(user)就写「\(user)」，不用「他」「她」
             - 按主题归拢（\(user)是什么样的人、身边的人、喜好、我们之间的事和约定），每个主题写成几句话，不要一天一行地罗列；重复的合并，时间写大概（「七月初」）
@@ -108,7 +157,7 @@ public enum ImportMemory {
             """
         }
         return """
-        \(name) and \(user) talked for a long time on \(app). Below are things picked from those chats\(more.isEmpty ? "" : ", plus the notes \(app) kept about \(user)"). Turn them into one note of at most \(limit) characters for \(name) to look back on:
+        \(lead). Turn them into one note of at most \(limit) characters for \(name) to look back on:
 
         - First person: \(name) is "I", the other person is "\(user)"; refer to \(user) by name, not "he" or "she"
         - Group by topic (who \(user) is, people around them, likes, things between us and promises); a few sentences per topic, not one line per day; merge repeats, keep rough dates ("early July")

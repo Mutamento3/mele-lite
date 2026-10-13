@@ -538,9 +538,11 @@ struct CompanionSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             row("你们是什么关系", "TA 醒来找你时会按这个拿捏分寸")
             let current = store.settings["relationship"] as? String ?? ""
-            // 导入的角色卡多一个「照角色卡」（10-01）：关系照卡里的场景，不套我们的关系包
+            // 导入的角色卡多一个「照角色卡」（10-01）：关系照卡里的场景，不套我们的关系包。
+            // 只要卡设定还在就一直给（10-12 内测：原来只在选中时出现，点了别的它就没了，再也选不回来）
+            let hasCard = !((store.persona["imported"] as? String) ?? "").isEmpty
             FlowChips(items: [("friend", "朋友"), ("partner", "恋人"), ("family", "家人"), ("buddy", "搭子")]
-                      + (current == "card" ? [("card", "照角色卡")] : []),
+                      + (current == "card" || hasCard ? [("card", "照角色卡")] : []),
                       selected: [current]) { id in
                 store.setNow(settings: ["relationship": current == id ? "" : id])
                 customRel = ""

@@ -22,6 +22,7 @@ struct ImportChatsView: View {
     @State private var items: [Item] = []
     @State private var chosen: Set<String> = []
     @State private var notes = 0
+    @State private var chars = 0                 // 笔记 / 总结的字数（10-13）
     @State private var cost: Double?
     @State private var memories = true
     @State private var moved: String?
@@ -38,7 +39,7 @@ struct ImportChatsView: View {
     var body: some View {
         TilePage {
             Tile {
-                Text("把你在 ChatGPT、Claude、DeepSeek、Gemini、Kelivo 里的聊天，或者导出成 md 的聊天记录，搬给\(companion.name)：旧聊天放进一个新窗口，能翻能搜；再从里面挑出值得记住的事，让 TA 记得你。")
+                Text("把你在 ChatGPT、Claude、DeepSeek、Gemini、Kelivo 里的聊天，或者导出成 md 的聊天记录，搬给\(companion.name)：旧聊天放进一个新窗口，能翻能搜；再从里面挑出值得记住的事，让 TA 记得你。一段你自己写的（或者别的 AI 帮你总结的）笔记也能选：不建窗口，只挑记忆。")
                     .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.ink)
                 ExpandRow(open: $howOpen) {
                     Text("怎么拿到导出包").font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.ink)
@@ -50,6 +51,7 @@ struct ImportChatsView: View {
                         Text("Gemini：打开 takeout.google.com → 先「取消全选」→ 只勾「我的活动」→ 点「包括所有活动数据」只留「Gemini Apps」→ 点「多种格式」把「活动记录」改成 JSON（默认是 HTML，选错了这里认不出）。Gemini 只记一问一答，不分对话，搬过来按天排成一段段。")
                         Text("Kelivo：设置 → 数据备份 → 导入和导出 → 导出为文件，选导出的 .zip。备份页「备份与导入内容」里可以只勾聊天记录、助手、记忆：「供应商」存着你填的 API key，这里用不到，不勾更放心；「文件」（图片附件）不勾包会小很多。包里所有对话下一步都会列出来，只勾想搬的就行。")
                         Text("md 聊天记录：每条消息前面一行「### 时间 — 名字」的那种（比如「### 6:49 PM — 阿橘」），日期单独一行「## 2026年10月11日」。第一行写着「# Chat with 名字」的话，那个名字就是 TA。一个文件是一段对话，可以一次选好几个。")
+                        Text("笔记 / 总结：不是聊天记录的 md、txt 也能选（比如你让别的 AI 把聊天总结成的一段话）。不会建聊天窗口，只从里面挑值得记住的事。")
                         Text("包可以直接选，也可以在「文件」里解压后选里面的 conversations.json。包只在你手机上读，不会上传到我们这里；连着 Mele Host 的话，选中的对话会发到你自己的 Host 上。")
                     }
                     .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
@@ -60,6 +62,7 @@ struct ImportChatsView: View {
             }
 
             if !items.isEmpty && moved == nil { pickList }
+            if source == "notes" && moved == nil { notesTile }
             if let moved { progress(moved) }
         }
         .navigationTitle(String(localized: "从别的 AI 搬过来"))
@@ -107,6 +110,18 @@ struct ImportChatsView: View {
             Button(busy ? String(localized: "搬家中…") : String(localized: "搬过来")) { Task { await start() } }
                 .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
                 .disabled(busy || chosen.isEmpty)
+        }
+    }
+
+    /// 认出来不是聊天记录、是一段笔记（10-13）：不建窗口，直接挑记忆
+    private var notesTile: some View {
+        Tile {
+            Text("这不是聊天记录，是一段笔记 / 总结（\(chars) 字）。不建聊天窗口，直接从里面挑值得记住的事给\(companion.name)。")
+                .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.ink)
+            Text(costLine).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+            Button(busy ? String(localized: "交过去…") : String(localized: "挑记忆")) { Task { await start() } }
+                .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
+                .disabled(busy)
         }
     }
 
@@ -181,6 +196,7 @@ struct ImportChatsView: View {
     private func show(_ o: [String: Any]) {
         source = o["source"] as? String ?? ""
         notes = o["memory_notes"] as? Int ?? 0
+        chars = o["chars"] as? Int ?? 0
         cost = o["cost"] as? Double
         items = (o["conversations"] as? [[String: Any]] ?? []).map {
             Item(id: $0["id"] as? String ?? "", title: $0["title"] as? String ?? "", first: $0["first"] as? String ?? "",
@@ -194,15 +210,17 @@ struct ImportChatsView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
-            var body: [String: Any] = ["ids": Array(chosen), "memories": memories]
-            if var draft = hostDraft {                 // 连着 Host：选中的那几段整份发过去
+            let isNotes = source == "notes"
+            var body: [String: Any] = ["ids": Array(chosen), "memories": isNotes || memories]
+            if var draft = hostDraft {                 // 连着 Host：选中的那几段整份发过去（笔记就是全文）
                 draft["conversations"] = (draft["conversations"] as? [[String: Any]] ?? []).filter { chosen.contains($0["id"] as? String ?? "") }
-                draft["memories"] = memories
+                draft["memories"] = isNotes || memories
                 body = draft
             }
             let o = try await model.api.raw("POST", "companions/\(cid)/import", json: body) as? [String: Any] ?? [:]
             hostDraft = nil
-            moved = String(localized: "搬了 \(o["messages"] as? Int ?? 0) 条，在「从 \(app) 搬来的」窗口里")
+            moved = isNotes ? String(localized: "笔记交给\(companion.name)了")
+                            : String(localized: "搬了 \(o["messages"] as? Int ?? 0) 条，在「从 \(app) 搬来的」窗口里")
             await refresh()
         } catch {
             self.error = error.localizedDescription

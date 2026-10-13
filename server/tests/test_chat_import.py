@@ -114,3 +114,23 @@ def test_parse_and_chunks():
     parts = CI.chunks([{"title": "", "messages": msgs}], "小满", "UTC", size=2000)
     assert len(parts) > 1 and all(len(p) <= 2400 for p in parts) and parts[0].startswith("〔2025-09-20〕")
     assert "小满：" in parts[0] and "我：" in parts[0]
+
+
+async def test_notes_file_picks_memories_without_a_window(pool):
+    """10-13 内测：自己用 GPT 总结的聊天记录搬不进来。不是对话的笔记 / 总结：不建窗口，只挑记忆"""
+    e, t = await _setup(pool, ["- 小满养了一只橘猫叫年糕\n- 小满下个月要去东京旅行"])
+    async with e.client(t) as c:
+        comp, _ = await e.first_window(c)
+        await c.put("/me/profile", json={"name": "小满"})
+        before = await pool.fetchval("SELECT count(*) FROM conversations")
+        r = await c.post(f"/companions/{comp['id']}/import",
+                         json={"source": "notes", "notes": "# 关于小满\n\n小满养了一只橘猫叫年糕。\n\n小满喜欢芒果。", "memories": True})
+        assert r.status_code == 201 and r.json() == {"conversation_id": "", "messages": 0, "picking": True}
+        await _wait(comp["id"])
+        got = (await c.get(f"/companions/{comp['id']}/import")).json()
+        assert (await c.post(f"/companions/{comp['id']}/import", json={"source": "notes", "notes": "  "})).status_code == 400
+    assert got["state"] == "done" and got["total"] == 1 and got["picked"] == 1
+    assert await pool.fetchval("SELECT count(*) FROM conversations") == before          # 没建窗口
+    assert [m.content for m in await M.list_memories(pool, UUID(comp["id"]))] == ["小满养了一只橘猫叫年糕"]   # 东京是编的
+    asked = e.model.requests[0].messages[-1].text
+    assert "笔记" in asked and "聊天记录" not in asked and "关于小满" in asked

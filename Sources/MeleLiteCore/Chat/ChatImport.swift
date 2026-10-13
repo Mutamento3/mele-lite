@@ -5,9 +5,12 @@ import Foundation
 /// 只留文字：系统消息、工具、思考、图片 / 文件（导出里只有文件名）都不要；没有字的对话不要。
 public enum ChatSource: String, Sendable, CaseIterable {
     case chatgpt, claude, deepseek, gemini, kelivo, markdown
+    /// 不是聊天记录的笔记 / 总结（10-13 内测：自己用 GPT 总结的聊天记录搬不进来）：不建窗口，只挑记忆
+    case notes
     public var appName: String {
         switch self {
         case .chatgpt: "ChatGPT"; case .claude: "Claude"; case .deepseek: "DeepSeek"; case .gemini: "Gemini"; case .kelivo: "Kelivo"; case .markdown: "Markdown"
+        case .notes: "笔记"
         }
     }
 }
@@ -42,6 +45,19 @@ public enum TimelineItem: Equatable, Sendable {
 
 public enum ChatImport {
     /// 好几个包一起（Claude 10 月起分包给：conversations-000.zip、-001.zip……）：合起来、同一段只留一次；两家混着不行
+    /// 认不出格式、但每份都是普通文字（md / txt，不是 JSON、不是 zip）→ 当笔记收：全文拼起来。有一份不是就 nil
+    public static func plainNotes(_ files: [Data]) -> String? {
+        var parts: [String] = []
+        for f in files {
+            guard let first = f.first(where: { !Set<UInt8>([0x20, 0x0A, 0x0D, 0x09, 0xEF, 0xBB, 0xBF]).contains($0) }),
+                  first != UInt8(ascii: "{"), first != UInt8(ascii: "["), first != 0x50 || f.count < 4 || f[1] != 0x4B,
+                  let text = String(data: f, encoding: .utf8) else { return nil }
+            let t = text.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { parts.append(t) }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
     public static func parse(_ files: [Data]) throws -> (source: ChatSource, conversations: [ImportedConversation]) {
         var source: ChatSource?, out: [ImportedConversation] = [], seen = Set<String>()
         for f in files {

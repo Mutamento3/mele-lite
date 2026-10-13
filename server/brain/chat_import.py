@@ -26,7 +26,9 @@ from .settings import Settings
 log = logging.getLogger(__name__)
 
 SOURCES = {"chatgpt": "ChatGPT", "claude": "Claude", "deepseek": "DeepSeek", "gemini": "Gemini", "kelivo": "Kelivo",
-           "markdown": "Markdown"}      # md 聊天记录（10-11）：手机上认好再发来
+           "markdown": "Markdown",      # md 聊天记录（10-11）：手机上认好再发来
+           "notes": "笔记"}             # 不是聊天记录的笔记 / 总结（10-13）：不建窗口，只挑记忆
+NOTES_MAX = 400_000
 KEEP_LIVE = 40
 CHUNK = 6000
 MAX_MESSAGES = 50_000
@@ -44,11 +46,19 @@ def _when(v) -> datetime | None:
         return None
 
 
-def clean(body: dict) -> tuple[str, list[dict], list[str]]:
-    """收进来的包：认得的来源、每段（标题、消息按时间）、官方笔记。不合格的段 / 消息丢掉。"""
+def clean(body: dict) -> tuple[str, list[dict], list[str], str]:
+    """收进来的包：认得的来源、每段（标题、消息按时间）、官方笔记、笔记全文（只有 source=notes 才有）。不合格的段 / 消息丢掉。"""
     src = str(body.get("source") or "")
     if src not in SOURCES:
         raise ImportError_("不认识这是哪家的记录")
+    extra = [str(x).strip() for x in body.get("extra") or [] if str(x).strip()]
+    if src == "notes":
+        text = str(body.get("notes") or "").strip()
+        if not text:
+            raise ImportError_("笔记是空的")
+        if len(text) > NOTES_MAX:
+            raise ImportError_("笔记太长了，分几次搬")
+        return src, [], extra, text
     convs = []
     for c in body.get("conversations") or []:
         if not isinstance(c, dict):
@@ -65,8 +75,7 @@ def clean(body: dict) -> tuple[str, list[dict], list[str]]:
     if sum(len(c["messages"]) for c in convs) > MAX_MESSAGES:
         raise ImportError_(f"一次最多搬 {MAX_MESSAGES} 条，分几次选")
     convs.sort(key=lambda c: c["messages"][0]["at"])
-    extra = [str(x).strip() for x in body.get("extra") or [] if str(x).strip()]
-    return src, convs, extra
+    return src, convs, extra, ""
 
 
 async def store(pool, acc: UUID, cid: UUID, src: str, convs: list[dict], *, tz: str) -> tuple[UUID, int]:
@@ -115,6 +124,56 @@ def chunks(convs: list[dict], user_name: str, tz: str, size: int = CHUNK) -> lis
         if cur:
             out.append(cur)
     return out
+
+
+def notes_chunks(text: str, size: int = CHUNK) -> list[str]:
+    """笔记 / 总结切块（跟 ImportMemory.notesChunks 一样）：按空行分段攒到 size；一段本身超长就硬切"""
+    out: list[str] = []
+    cur = ""
+    for para in (x.strip() for x in text.split("\n\n")):
+        if not para:
+            continue
+        if len(para) > size:
+            if cur:
+                out.append(cur)
+                cur = ""
+            out += [para[i:i + size] for i in range(0, len(para), size)]
+            continue
+        if cur and len(cur) + 2 + len(para) > size:
+            out.append(cur)
+            cur = ""
+        cur += ("\n\n" if cur else "") + para
+    if cur:
+        out.append(cur)
+    return out
+
+
+def notes_prompt(text: str, name: str, user: str, lang: str) -> str:
+    """笔记 / 总结挑记忆（跟 ImportMemory.pickPrompt(notes:) 一样的意思）"""
+    user = user or ("TA" if lang == "zh" else "them")
+    if lang == "zh":
+        return f"""下面是{user}自己写的一段笔记或总结（可能是别的 AI 帮{user}整理的，里面说的「我」是{user}自己）。挑出 0～5 件{name}以后值得记住的事：{user}的经历、喜好、身边的人、重要的时刻、{user}和以前的 AI 之间说定的事。
+
+- 每件一行，格式：- YYYY-MM-DD｜一句话（笔记里写了日期才写，没写就不写日期）
+- 用第一人称写：{name}写「我」，{user}就写「{user}」（笔记里的「我」要换成「{user}」）
+- 提到{user}就写「{user}」，不用「他」「她」
+- 只写笔记里真有的，不猜、不补
+- 没有值得记的就只写：（没有）
+
+⟪笔记开始⟫
+{text}
+⟪笔记结束⟫"""
+    return f"""Below is a note or summary {user} wrote (maybe with another AI's help; "I" in it means {user}). Pick 0–5 things {name} should remember: {user}'s life, likes, people around them, important moments, things {user} and their previous AI agreed on.
+
+- One per line: - YYYY-MM-DD | one sentence (date only if the note gives one)
+- First person: {name} is "I"; {user} is "{user}" (turn the note's "I" into "{user}")
+- Refer to {user} by name, not "he" or "she"
+- Only what is in the note; no guessing
+- If nothing is worth keeping, write only: (none)
+
+⟪note start⟫
+{text}
+⟪note end⟫"""
 
 
 def pick_prompt(transcript: str, name: str, user: str, lang: str) -> str:
@@ -168,19 +227,22 @@ def parse_picked(reply: str) -> list[tuple[str, str]]:
 async def start(deps, acc: UUID, cid: UUID, body: dict) -> dict:
     pool = deps.pool
     s = Settings.from_dict(await archive.get_settings(pool, cid))
-    src, convs, extra = clean(body)
+    src, convs, extra, notes = clean(body)
     user = (await accounts.get_profile(pool, acc))["name"] or s.user_name
-    vid, n = await store(pool, acc, cid, src, convs, tz=s.tz)
-    picking = body.get("memories") is not False
+    if notes:                                        # 笔记 / 总结：不建窗口，只挑记忆
+        vid, n, picking = None, 0, True
+    else:
+        vid, n = await store(pool, acc, cid, src, convs, tz=s.tz)
+        picking = body.get("memories") is not False
     if picking:
         state = await archive.get_state(pool, cid)
-        parts = chunks(convs, user, s.tz)
+        parts = notes_chunks(notes) if notes else chunks(convs, user, s.tz)
         state["import_job"] = {"state": "picking", "source": src, "chunks": parts, "total": len(parts),
-                               "done": 0, "picked": 0, "extra": extra, "conversation": str(vid),
+                               "done": 0, "picked": 0, "extra": extra, "conversation": str(vid) if vid else "",
                                "started_at": deps.now().isoformat()}
         await archive.save_state(pool, cid, state, now=deps.now())
         run(deps, acc, cid)
-    return {"conversation_id": str(vid), "messages": n, "picking": picking}
+    return {"conversation_id": str(vid) if vid else "", "messages": n, "picking": picking}
 
 
 async def status(deps, acc: UUID, cid: UUID) -> dict:
@@ -246,7 +308,8 @@ async def pick(deps, acc: UUID, cid: UUID) -> None:
     while job.get("done", 0) < len(chunks_):
         part = chunks_[job["done"]]
         req = ChatRequest(model=route.chat_model, system=[Block("你是一个仔细的整理员。" if s.lang == "zh" else "You are a careful note-taker.")],
-                          messages=[Msg("user", pick_prompt(part, name, user, s.lang))], tools=[], max_tokens=1500)
+                          messages=[Msg("user", (notes_prompt if job.get("source") == "notes" else pick_prompt)(part, name, user, s.lang))],
+                          tools=[], max_tokens=1500)
         from .tools import ToolContext
         ctx = ToolContext(pool=pool, embedder=deps.embedder, user_id=cid, account_id=acc, now=deps.now(), lang=s.lang,
                           allowed=(), tz=s.tz, deps=deps)

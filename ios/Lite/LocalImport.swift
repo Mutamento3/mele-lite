@@ -58,7 +58,15 @@ enum LocalImport {
         } catch ChatImportError.needsJSON {
             return .failure(Failure(message: String(localized: "这是 HTML 格式的 Takeout：回 Google Takeout 重新导一次，「我的活动」那一项把格式改成 JSON")))
         } catch {
-            return .failure(Failure(message: String(localized: "认不出这个文件：要官方「导出数据」给的压缩包（Kelivo 是「导出为文件」那个 .zip），或者里面的 conversations.json")))
+            // 认不出、但是普通文字（10-13 内测：自己用 GPT 总结的聊天记录）：当笔记收，不建窗口，只挑记忆
+            if let text = ChatImport.plainNotes(chats) {
+                let draft: [String: Any] = ["source": ChatSource.notes.rawValue, "extra": extra, "notes": text,
+                                            "conversations": [[String: Any]]()]
+                let preview: [String: Any] = ["source": ChatSource.notes.rawValue, "memory_notes": extra.count, "chars": text.count,
+                                              "cost": NSNull(), "conversations": [[String: Any]]()]
+                return .success(Read(draft: draft, preview: preview, chars: text.count))
+            }
+            return .failure(Failure(message: String(localized: "认不出这个文件：要官方「导出数据」给的压缩包（Kelivo 是「导出为文件」那个 .zip）、里面的 conversations.json，或者 md / txt 的聊天记录和笔记")))
         }
         guard !got.conversations.isEmpty else { return .failure(Failure(message: String(localized: "包里没有聊过天的对话"))) }
         let draft: [String: Any] = [
@@ -94,6 +102,16 @@ enum LocalImport {
         guard s.companion(cid) != nil else { return .error(404, String(localized: "没有这个联系人")) }
         guard let draft = s.read(draftFile) as? [String: Any], let src = ChatSource(rawValue: draft["source"] as? String ?? "") else {
             return .error(400, String(localized: "先选文件"))
+        }
+        if src == .notes {                             // 笔记 / 总结（10-13）：不建窗口，只挑记忆
+            let text = draft["notes"] as? String ?? ""
+            guard !text.isEmpty else { return .error(400, String(localized: "先选文件")) }
+            s.write(jobFile(cid), ["state": "picking", "source": src.rawValue, "chunks": ImportMemory.notesChunks(text), "done": 0,
+                                   "picked": [[String: String]](), "extra": draft["extra"] ?? [String](),
+                                   "conversation": "", "started_at": LocalStore.iso(Date())])
+            run(host, companion: cid)
+            s.write(draftFile, [String: Any]())
+            return .json(["conversation_id": "", "messages": 0, "picking": true], status: 201)
         }
         let want = Set(b["ids"] as? [String] ?? [])
         let convs = (draft["conversations"] as? [[String: Any]] ?? []).compactMap(conversation).filter { want.isEmpty || want.contains($0.id) }
@@ -191,7 +209,7 @@ enum LocalImport {
         var picked = (job["picked"] as? [[String: String]] ?? [])
         var done = job["done"] as? Int ?? 0
         while done < chunks.count {
-            let prompt = ImportMemory.pickPrompt(chunks[done], name: name, userName: userName, zh: zh)
+            let prompt = ImportMemory.pickPrompt(chunks[done], name: name, userName: userName, zh: zh, notes: src == .notes)
             guard let reply = await ask(legs, prompt) else { return fail(String(localized: "挑到一半模型没回，过一会儿再打开这里接着挑")) }
             for it in ImportMemory.parsePicked(reply) {
                 // 回查原文（照回声）：编出来的事不要

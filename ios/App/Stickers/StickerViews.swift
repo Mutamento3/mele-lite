@@ -59,6 +59,9 @@ struct StickerRoomView: View {
     @State private var editing: StickerDTO?
     @State private var pastingLinks = false     // 粘贴图片链接批量加（10-11 内测反馈）
     @State private var linkText = ""
+    @State private var selecting = false        // 选几张一起删（10-12 内测反馈：不能批量删除）
+    @State private var selected: Set<Int> = []
+    @State private var confirmDelete = false
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
 
@@ -73,15 +76,30 @@ struct StickerRoomView: View {
                         Text("还没有表情包。点右上角从相册加（一次能选好几张）或者粘贴一堆图片链接，聊天里长按图片也能「加到表情包」。所有联系人都能用，它会挑着发。")
                             .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
                     }
+                    if selecting {
+                        Text(selected.isEmpty ? "点几张要删的" : "选了 \(selected.count) 张").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
+                    }
                     LazyVGrid(columns: columns, spacing: 10) {
                         ForEach(stickers) { s in
-                            Button { editing = s } label: {
+                            Button {
+                                if selecting {
+                                    if selected.contains(s.id) { selected.remove(s.id) } else { selected.insert(s.id) }
+                                } else { editing = s }
+                            } label: {
                                 AuthImageView(urlPath: s.path, contentMode: .fit)
                                     .frame(height: 78)
                                     .frame(maxWidth: .infinity)
+                                    .opacity(selecting && !selected.contains(s.id) ? 0.55 : 1)
                                     .overlay(alignment: .bottomTrailing) {
-                                        if !s.onlyFor.isEmpty {
+                                        if !s.onlyFor.isEmpty && !selecting {
                                             Image(systemName: "person.fill").font(Typo.icon(10)).foregroundStyle(theme.accentDeep)
+                                        }
+                                    }
+                                    .overlay(alignment: .topTrailing) {
+                                        if selecting {
+                                            Image(systemName: selected.contains(s.id) ? "checkmark.circle.fill" : "circle")
+                                                .font(Typo.icon(18)).foregroundStyle(selected.contains(s.id) ? theme.accentDeep : theme.inkFaint)
+                                                .background(Circle().fill(.white).padding(2))
                                         }
                                     }
                             }
@@ -98,14 +116,29 @@ struct StickerRoomView: View {
             .navigationTitle("表情包")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关上") { dismiss() } }
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button { picking = true } label: { Label("从相册选", systemImage: "photo.on.rectangle") }
-                        Button { pastingLinks = true } label: { Label("粘贴图片链接", systemImage: "link") }
-                    } label: { busy ? AnyView(ProgressView()) : AnyView(Image(systemName: "plus")) }
-                        .disabled(busy)
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(selecting ? "取消" : "关上") {
+                        if selecting { selecting = false; selected = [] } else { dismiss() }
+                    }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    if selecting {
+                        Button(String(localized: "删掉 \(selected.count) 张"), role: .destructive) { confirmDelete = true }
+                            .disabled(selected.isEmpty || busy)
+                    } else {
+                        Menu {
+                            Button { picking = true } label: { Label("从相册选", systemImage: "photo.on.rectangle") }
+                            Button { pastingLinks = true } label: { Label("粘贴图片链接", systemImage: "link") }
+                            if !stickers.isEmpty {
+                                Button { selecting = true; selected = [] } label: { Label("选几张删掉", systemImage: "checkmark.circle") }
+                            }
+                        } label: { busy ? AnyView(ProgressView()) : AnyView(Image(systemName: "plus")) }
+                            .disabled(busy)
+                    }
+                }
+            }
+            .confirmationDialog(String(localized: "删掉这 \(selected.count) 张？"), isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button(String(localized: "删掉 \(selected.count) 张"), role: .destructive) { Task { await deleteSelected() } }
             }
             .photosPicker(isPresented: $picking, selection: $picks, maxSelectionCount: 20, matching: .images)
             .onChange(of: picks) { _, items in
@@ -125,6 +158,34 @@ struct StickerRoomView: View {
     private func load() async {
         stickers = (try? await model.api.call("GET", "stickers")) ?? stickers
         loaded = true
+        if await readTexts() { stickers = (try? await model.api.call("GET", "stickers")) ?? stickers }
+    }
+
+    /// 还没描述的：图上有字就把字认出来当描述（手机自带文字识别，离线；10-13 内测：描述一直「还在写」，
+    /// 因为 TA 的模型不会看图）。连着 Host 时 Host 自己不会认字，所以在这里认完 PATCH 上去；手机本机的在 LocalRooms2 里也认，
+    /// 这里认到的就是漏网的。每张只认一次。返回有没有改到
+    private func readTexts() async -> Bool {
+        let key = "sticker.ocrTried"
+        var tried = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        var changed = false
+        for s in stickers where s.caption.isEmpty && !tried.contains("\(s.id)") {
+            tried.insert("\(s.id)")
+            guard let d = try? await model.api.data(s.path),
+                  let text = await Task.detached(priority: .utility, operation: { StickerOCR.text(in: d) }).value else { continue }
+            if (try? await model.api.raw("PATCH", "stickers/\(s.id)", json: ["caption": text])) != nil { changed = true }
+        }
+        UserDefaults.standard.set(Array(tried.suffix(2000)), forKey: key)
+        return changed
+    }
+
+    private func deleteSelected() async {
+        busy = true
+        defer { busy = false }
+        var n = 0
+        for id in selected where (try? await model.api.send("DELETE", "stickers/\(id)")) != nil { n += 1 }
+        note = String(localized: "删掉了 \(n) 张")
+        selecting = false; selected = []
+        await load()
     }
 
     private func upload(_ items: [PhotosPickerItem]) async {
@@ -252,7 +313,8 @@ struct StickerEditor: View {
                 Section {
                     TextEditor(text: $caption).frame(minHeight: 90)
                 } header: { Text("它看到的样子") } footer: {
-                    Text(caption.isEmpty ? "描述还在写。" : "它按这段描述找表情包；写得不对就改成你的意思（比如「阴阳怪气」）。")
+                    Text(caption.isEmpty ? "还没有描述。图上有字会先把字认出来当描述；TA 的模型会看图的话过一会儿它会写一句（DeepSeek 不会看图）。你也可以自己写一句，比如「阴阳怪气」。"
+                                         : "它按这段描述找表情包；写得不对就改成你的意思（比如「阴阳怪气」）。")
                 }
                 Section {
                     ForEach(model.companions) { c in

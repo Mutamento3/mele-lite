@@ -126,12 +126,23 @@ enum LocalRooms2 {
         return .json(host.attachmentPublic(aid) ?? [:], status: 201)
     }
 
-    /// 还没描述的表情包：用第一个配了 key、同意过的联系人那家模型看一眼
+    /// 还没描述的表情包：先用手机自带的文字识别把图上的字认出来当描述（离线、不花钱；10-13 内测：描述一直「还在写」）；
+    /// 没字的再用第一个配了 key、同意过、**会看图**的联系人那家模型看一眼（DeepSeek 不会看图，以前发过去报错、整条循环退出，谁的都没写）
     static func captionLater(_ host: LocalHost) {
         Task.detached {
             let s = host.store
+            for st in s.collection("stickers") where (st["caption"] as? String ?? "").isEmpty && (st["ocr"] as? Bool) != true {
+                var all = s.collection("stickers")
+                guard let i = all.firstIndex(where: { ($0["id"] as? Int) == (st["id"] as? Int) }) else { continue }
+                all[i]["ocr"] = true                                       // 认过一次就不再认（没字的永远没字）
+                if let d = try? Data(contentsOf: s.fileURL(st["file"] as? String ?? "")), let text = StickerOCR.text(in: d) {
+                    all[i]["caption"] = text
+                }
+                s.saveCollection("stickers", all)
+            }
             guard let comp = s.companions.first(where: { c in host.route(for: c).map { !LiteConsent.book.needsAsk($0.0) } ?? false }),
-                  let (provider, key) = host.quietRoute(for: comp) else { return }
+                  let (provider, key) = host.quietRoute(for: comp), provider.seesImages else { return }
+            var failures = 0
             let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
             let ask = zh ? "这是一张聊天用的表情包。用一句话（20 字以内）说它是什么、表达什么情绪，只写这一句。"
                          : "This is a chat sticker. In one short line (under 12 words), say what it shows and the feeling it expresses. Write only that line."
@@ -142,7 +153,12 @@ enum LocalRooms2 {
                 do {
                     let req = ChatRequest(system: "", turns: [ChatTurn(role: .user, text: ask, imageJPEG: jpeg)], maxTokens: 200)
                     for try await e in makeClient(provider, key: key).stream(req) { if case .text(let t) = e { text += t } }
-                } catch { return }
+                } catch {
+                    failures += 1                                          // 这张跳过；连错三张就是模型 / 网络的问题，歇了
+                    if failures >= 3 { return }
+                    continue
+                }
+                failures = 0
                 var all = s.collection("stickers")
                 if let i = all.firstIndex(where: { ($0["id"] as? Int) == (st["id"] as? Int) }) {
                     all[i]["caption"] = text.trimmingCharacters(in: .whitespacesAndNewlines)

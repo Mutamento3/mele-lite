@@ -20,6 +20,12 @@ public struct ProviderConfig: Codable, Equatable, Sendable {
     public init(kind: ProviderKind, baseURL: String? = nil, model: String, thinking: Bool = false) {
         self.kind = kind; self.baseURL = baseURL; self.model = model; self.thinking = thinking
     }
+
+    /// 这家会不会看图（10-13：DeepSeek 不会，发图过去直接报错——表情包描述那条循环一错全停，谁的描述都没写）
+    public var seesImages: Bool {
+        guard kind == .openai, let host = URL(string: baseURL ?? "")?.host?.lowercased() else { return true }
+        return !host.contains("deepseek")
+    }
 }
 
 /// 对面这个人在它眼里是谁。主号一个；小号可以有好几个，各自一份聊天，互相看不到。
