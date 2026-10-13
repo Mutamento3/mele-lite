@@ -69,9 +69,11 @@ struct BubbleSettingsView: View {
                 header
                     .padding(.horizontal, 16)
                     .padding(.top, 22)
+                // 预览也钉在滚动区外面（10-13 内测：往下调选项时想一直看得见效果）
+                preview
+                    .padding(.horizontal, 16)
                 ScrollView {
                     VStack(spacing: 10) {
-                        preview
                         presetsCard
                         colorCard
                         if draft.material == .glass { glassCard }
