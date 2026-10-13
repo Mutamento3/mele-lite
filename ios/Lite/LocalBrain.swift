@@ -710,8 +710,12 @@ final class LocalBrain: @unchecked Sendable {
             say(["type": "card", "kind": "date", "text": line, "private": false])
         }
         let long = settings["long_mode"] as? Bool ?? false
-        let bubbles = Bubbles.split(parsed.text, cap: settings["max_bubbles"] as? Int ?? 6, offline: long)
-        var finalText = parsed.text
+        // 跟它最近说过的几乎一样的气泡丢掉（10-13 内测：DeepSeek 把腔调样本 / 上一轮原话抄回来，一上午每句都是同一句）
+        let recentSaid = stored.filter { ($0["role"] as? String) == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf) }
+            .suffix(6).flatMap { Bubbles.split($0["text"] as? String ?? "", cap: nil, offline: long) }
+        let split = Bubbles.split(parsed.text, cap: settings["max_bubbles"] as? Int ?? 6, offline: long)
+        let bubbles = Repeats.dropRepeated(split, recent: recentSaid)
+        var finalText = bubbles.count == split.count ? parsed.text : bubbles.joined(separator: "\n\n")
         var clips: [String: Any] = [:]
         for (i, b) in bubbles.enumerated() {
             if i > 0 {

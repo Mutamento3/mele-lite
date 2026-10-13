@@ -59,8 +59,8 @@ PICK = {
 
 _LEDGER_HEAD = {"zh": "〔账本〕更早的对话，远的模糊、近的清楚（账里的「我」是你，「{user}」是对方）：",
                 "en": "〔Ledger〕Earlier conversation — older is hazier, recent is clearer (\"I\" is you, \"{user}\" is them):"}
-_SAMPLES_HEAD = {"zh": "〔腔调样本〕你之前的几句原话，照这个腔调接着说：",
-                 "en": "〔Voice samples〕A few of your own earlier lines — keep this voice:"}
+_SAMPLES_HEAD = {"zh": "〔腔调样本〕你以前说话的样子，看语气、句长、用词就好（这几句本身早就说过了）：",
+                 "en": "〔Voice samples〕How you talk — tone, length, word choice (these exact lines were already said):"}
 _SPEAKER = {"zh": {"user": "TA", "assistant": "我"}, "en": {"user": "Them", "assistant": "Me"}}
 WAKE_LINE = {"zh": "（我自己醒来，去找 TA）", "en": "(I woke up on my own and reached out)"}
 
@@ -118,7 +118,9 @@ def plan_roll(msgs: list[StoredMsg], keep_count: int | None = None, keep_chars: 
 
 
 def voice_samples(rolled: list[StoredMsg]) -> list[str]:
-    return [m.text[:SAMPLE_CHARS] for m in rolled if m.role == "assistant"][-VOICE_SAMPLES:]
+    """去掉长得像的、从头到尾散着挑（10-13：原来取最后 6 句，恰是重复最凶的几句，DeepSeek 照抄一整轮）"""
+    from .repeats import pick_samples
+    return pick_samples([m.text[:SAMPLE_CHARS] for m in rolled if m.role == "assistant"], VOICE_SAMPLES)
 
 
 def _grams(text: str) -> set[str]:

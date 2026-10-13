@@ -45,10 +45,15 @@ def test_plan_roll_reads_module_constants(monkeypatch):
     assert [m.id for m in plan_roll(convo(6)).kept] == [5, 6]
 
 
-def test_voice_samples_last_six_of_its_own_lines():
-    rolled = convo(20)
-    assert voice_samples(rolled) == [f"第{i}条" for i in (10, 12, 14, 16, 18, 20)]
-
+def test_voice_samples_are_distinct_and_spread():
+    """10-13：不再取最后 6 句（恰是重复最凶的），去掉长得像的、从头到尾散着挑"""
+    texts = ["小满今天吃了橘子，酸得眯眼", "明天要去考数学，复习到几点", "楼下猫又来蹭饭了", "下雨了，记得带伞出门",
+             "昨晚那部电影结尾我没看懂", "耳机左边不响了，得修", "咖啡续了第三杯，手在抖", "周末想去爬山看日出",
+             "新买的书到了，封面是蓝的", "等天擦黑，河边灯一亮，我们再去走走。", "等天擦黑，河边灯亮了再出去走，不赶。"]
+    rolled = [sm(i, "assistant" if i % 2 else "user", texts[i // 2] if i % 2 else "嗯") for i in range(1, 22)]
+    got = voice_samples(rolled)
+    assert len(got) == 6 and got[0] == texts[0] and got[-1] == "等天擦黑，河边灯一亮，我们再去走走。"
+    assert "等天擦黑，河边灯亮了再出去走，不赶。" not in got
 
 def test_quota_curve():
     assert [quota_for_age(a) for a in (0, 1, 2, 3, 13)] == [2500, 1000, 400, 100, 100]
@@ -150,7 +155,7 @@ async def test_age_day_needs_it_shorter():
 def test_render_ledger():
     text = render_ledger({D: "- 聊了芒果"}, ["记住啦"], "zh")
     assert text == ("〔账本〕更早的对话，远的模糊、近的清楚（账里的「我」是你，「TA」是对方）：\n## 2026-09-26\n- 聊了芒果\n"
-                    "〔腔调样本〕你之前的几句原话，照这个腔调接着说：\n- 「记住啦」")
+                    "〔腔调样本〕你以前说话的样子，看语气、句长、用词就好（这几句本身早就说过了）：\n- 「记住啦」")
     assert render_ledger({}, [], "zh") == ""
 
 

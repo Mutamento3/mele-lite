@@ -58,7 +58,7 @@ enum LocalEcho {
             out.append(ds.keys.sorted().map { "## \($0)\n\(ds[$0]!)" }.joined(separator: "\n"))
         }
         if !samples.isEmpty {
-            out.append(zh ? "〔腔调样本〕你之前的几句原话，照这个腔调接着说：" : "〔Voice samples〕A few of your own earlier lines — keep this voice:")
+            out.append(zh ? "〔腔调样本〕你以前说话的样子，看语气、句长、用词就好（这几句本身早就说过了）：" : "〔Voice samples〕How you talk — tone, length, word choice (these exact lines were already said):")
             out.append(contentsOf: samples.map { "- 「\($0)」" })
         }
         return out.joined(separator: "\n")
@@ -150,7 +150,8 @@ enum LocalEcho {
         guard var c = s.conversation(conv) else { return }
         c["echo"] = ds
         c["rolled_upto"] = rolled.last!.id
-        c["echo_samples"] = group != nil ? [] : rolled.filter { $0.role == "assistant" }.map { String($0.text.prefix(sampleChars)) }.suffix(voiceSamples).map { $0 }
+        // 腔调样本：去掉长得像的、从头到尾散着挑（10-13 内测：原来取最后 6 句，恰是重复最凶的几句，DeepSeek 照抄一整轮）
+        c["echo_samples"] = group != nil ? [] : Repeats.pickSamples(rolled.filter { $0.role == "assistant" }.map { String($0.text.prefix(sampleChars)) }, max: voiceSamples)
         c["echo_fails"] = 0
         c["echo_at"] = LocalStore.iso(Date())
         c["gauge"] = nil                       // 卷完了，上一轮的水位不作数；下一轮重新量

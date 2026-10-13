@@ -30,6 +30,7 @@ from llm.types import ChatRequest, ImagePart, Msg, ToolRound, Usage
 from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, probe as sentinel, reactions, tarot, vision, voice, wallet
 from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
+from . import repeats
 from .context import ContextParts, build_request, render_volatile, user_tag
 from . import inner_voice, monologue
 from . import group as G, groups, model_noise, timeline
@@ -571,6 +572,12 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     if out.thinking.strip():
         await emit({"type": "thinking", "text": out.thinking, "ms": thinking_ms})
     bubbles_out = split_reply(out.text, settings.max_bubbles, settings.long_mode)
+    # 跟它最近说过的几乎一样的气泡丢掉（10-13 内测：DeepSeek 把腔调样本 / 上一轮原话抄回来，一上午每句都是同一句）
+    recent_said = [b for m in await archive.recent(pool, conv, 8) if m.role == "assistant"
+                   for b in split_reply(m.text, None, settings.long_mode)]
+    kept = repeats.drop_repeated(bubbles_out, recent_said)
+    if len(kept) != len(bubbles_out):
+        bubbles_out, out.text = kept, "\n\n".join(kept)
     clip_ids: list = []
     for i, bubble in enumerate(bubbles_out):
         if i:
