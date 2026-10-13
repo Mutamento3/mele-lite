@@ -150,10 +150,13 @@ final class LocalStore: @unchecked Sendable {
         return f.string(from: d)
     }
 
+    /// 带不带小数秒都认（10-13 内测：朋友圈「N 条新互动」每次进去都在——App 发来的 since 没有小数秒，这里认不出就当成「从头算」）
     static func date(_ s: Any?) -> Date {
         guard let s = s as? String else { return .distantPast }
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
         return f.date(from: s) ?? .distantPast
     }
 }

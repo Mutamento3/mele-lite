@@ -105,7 +105,11 @@ final class MomentsStore: ObservableObject {
 
     func loadActivity() async {
         var q: [URLQueryItem] = []
-        if seen > 0 { q.append(URLQueryItem(name: "since", value: ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seen)))) }
+        if seen > 0 {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]      // 跟存档一个写法（10-13：没小数秒本机那头认不出，每次进来都全算新的）
+            q.append(URLQueryItem(name: "since", value: f.string(from: Date(timeIntervalSince1970: seen))))
+        }
         struct Out: Decodable { let count: Int; let items: [MomentActivityDTO] }
         if let a: Out = try? await api.call("GET", "moments/activity", query: q) { activity = a.items }
     }
