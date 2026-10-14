@@ -63,4 +63,43 @@ import Testing
         #expect(String(data: data, encoding: .utf8) == nil)
         #expect(try LoreImport.parse(data, fileName: "w.txt", charName: "", userName: "", lang: .zh).entries.first?.content == "北边的旧灯塔")
     }
+
+    @Test func utf16Text() throws {
+        // Windows 记事本存成「Unicode」：UTF-16 LE + BOM + CRLF（10-14 内测）
+        let txt = "灯塔\r\nkeys: lighthouse\r\n北边的旧灯塔"
+        var le = Data([0xFF, 0xFE]); le.append(txt.data(using: .utf16LittleEndian)!)
+        var be = Data([0xFE, 0xFF]); be.append(txt.data(using: .utf16BigEndian)!)
+        let bare = "lighthouse\nthe old one up north".data(using: .utf16LittleEndian)!
+        for d in [le, be] {
+            let e = try LoreImport.parse(d, fileName: "w.txt", charName: "", userName: "", lang: .zh).entries.first
+            #expect(e?.title == "灯塔" && e?.keys == ["lighthouse"] && e?.content == "北边的旧灯塔")
+        }
+        #expect(try LoreImport.parse(bare, fileName: "w.txt", charName: "", userName: "", lang: .en).entries.first?.content == "the old one up north")
+    }
+
+    @Test func numberedList() throws {
+        // 前面两小段 1. 2. 3. 是写给模型的规则，后面是一长串编号的词条
+        var lines = ["## 用法", "1. **偶尔用，别每句都用**", "", "2. **看场合**", "", "3. **别照抄**", "",
+                     "### 反思", "1. 我有没有用太多？", "2. 合不合适？", "3. 有没有更好的说法？", "",
+                     "以下是清单：", "",
+                     "1.欧坤：OK 的音译", "如：欧坤呀",
+                     "2.不按常理出牌→倒反天罡",
+                     "3.牛逼说成牛福",
+                     "4.那很**了/那很诡异了",
+                     "5.\u{200C}你见过人**不",
+                     "6.这期神了/没绷住（指太好笑）"]
+        lines += (7...12).map { "\($0).小满第\($0)个梗：意思\($0)" }
+        lines += ["### 结尾", "别滥用"]
+        let es = try LoreImport.parse(Data(lines.joined(separator: "\r\n").utf8), fileName: "m.txt", charName: "", userName: "", lang: .zh).entries
+        #expect(es.count == 12)
+        #expect(es[0].title == "欧坤" && es[0].keys == ["欧坤"] && es[0].content == "欧坤：OK 的音译\n如：欧坤呀")
+        #expect(es[1].keys == ["不按常理出牌", "倒反天罡"])
+        #expect(es[2].keys == ["牛逼", "牛福"])
+        #expect(es[3].keys == ["那很诡异了"])                       // 「那很**了」拆出来的「那很」太碎，不要
+        #expect(es[4].keys == ["你见过人"])
+        #expect(es[5].keys == ["这期神了", "没绷住"])
+        #expect(es[11].content == "小满第12个梗：意思12")             // 「### 结尾」收住，「别滥用」不接上来
+        // 编号行太少就照旧按空行分段
+        #expect(try LoreImport.parse(Data("1. 灯塔\n北边\n\n2. 雾港\n南边".utf8), fileName: "w.txt", charName: "", userName: "", lang: .zh).entries.count == 2)
+    }
 }

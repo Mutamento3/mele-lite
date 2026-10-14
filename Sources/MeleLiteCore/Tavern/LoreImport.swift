@@ -28,12 +28,27 @@ public enum LoreImport {
         return (out, skipped)
     }
 
-    /// txt 先按 UTF-8 读，不行再按 GB18030（中文 Windows 存的 txt 常是 GBK）
+    /// txt 先看开头的 BOM（10-14 内测：Windows 记事本存成「Unicode」= UTF-16 LE，一个字都读不出），
+    /// 没 BOM 再按 UTF-8 读，不行再按 GB18030（中文 Windows 存的 txt 常是 GBK）
     public static func decodeText(_ data: Data) -> String? {
+        let b = [UInt8](data.prefix(4))
+        if b.starts(with: [0xFF, 0xFE, 0x00, 0x00]) { return String(data: data, encoding: .utf32LittleEndian).map(dropBOM) }
+        if b.starts(with: [0x00, 0x00, 0xFE, 0xFF]) { return String(data: data, encoding: .utf32BigEndian).map(dropBOM) }
+        if b.starts(with: [0xFF, 0xFE]) { return String(data: data.dropFirst(2), encoding: .utf16LittleEndian) }
+        if b.starts(with: [0xFE, 0xFF]) { return String(data: data.dropFirst(2), encoding: .utf16BigEndian) }
+        // 没 BOM 的 UTF-16：英文 / 符号那半边全是 0 字节；单数位多是 0 → LE，双数位多是 0 → BE
+        // （先判这个：0 字节在 UTF-8 里也算合法，纯英文的 UTF-16 会被当成 UTF-8 读通、满屏空字符）
+        let bytes = [UInt8](data.prefix(4096))
+        let zeroOdd = stride(from: 1, to: bytes.count, by: 2).filter { bytes[$0] == 0 }.count
+        let zeroEven = stride(from: 0, to: bytes.count, by: 2).filter { bytes[$0] == 0 }.count
+        if bytes.count >= 4, max(zeroOdd, zeroEven) * 4 >= bytes.count / 2,
+           let s = String(data: data, encoding: zeroOdd >= zeroEven ? .utf16LittleEndian : .utf16BigEndian) { return s }
         if let s = String(data: data, encoding: .utf8) { return s }
         let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
         return String(data: data, encoding: String.Encoding(rawValue: gb))
     }
+
+    static func dropBOM(_ s: String) -> String { s.hasPrefix("\u{FEFF}") ? String(s.dropFirst()) : s }
 
     // MARK: JSON
 
@@ -70,6 +85,7 @@ public enum LoreImport {
     static func textEntries(_ text: String) -> [[String: Any]] {
         let lines = text.replacingOccurrences(of: "\u{FEFF}", with: "").replacingOccurrences(of: "\r\n", with: "\n")
             .components(separatedBy: "\n")
+        if let list = numberedEntries(lines) { return list }
         let ruled = lines.contains { matches(rule, $0) }
         var blocks: [[String]] = [], cur: [String] = []
         for l in lines {
@@ -78,6 +94,73 @@ public enum LoreImport {
         }
         if !cur.isEmpty { blocks.append(cur) }
         return blocks.compactMap(block)
+    }
+
+    // MARK: 编号清单（10-14 内测：一份「热梗世界书」txt，一百多个梗一行一个编号，前面还有两小段 1. 2. 3. 的用法规则）
+
+    static let numberedLine = try! NSRegularExpression(pattern: #"^\s*(\d{1,3})\s*[.、．)）]\s*(.*)$"#)
+    static let invisible = CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{FEFF}")
+
+    /// 一个编号一条，下面没编号的几行接在它后面（# 标题 / <标签> 收住）。编号从头数起算新的一组；
+    /// 有 ≥ 10 条的组就只要这些组——前面那几组「1. 2. 3.」多半是写给模型的用法规则，不是词条。编号行不到 5 行就不按清单读
+    static func numberedEntries(_ lines: [String]) -> [[String: Any]]? {
+        var runs: [[(head: String, body: [String])]] = [], run: [(head: String, body: [String])] = []
+        var last = 0, open = false
+        for l in lines {
+            let t = l.trimmingCharacters(in: .whitespaces.union(invisible))
+            if let m = numberedLine.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+               let nr = Range(m.range(at: 1), in: t), let n = Int(t[nr]), let hr = Range(m.range(at: 2), in: t) {
+                if n <= last, !run.isEmpty { runs.append(run); run = [] }
+                run.append((String(t[hr]).trimmingCharacters(in: .whitespaces.union(invisible)), []))
+                last = n; open = true
+            } else if t.hasPrefix("#") || t.hasPrefix("<") {
+                open = false
+            } else if open, !t.isEmpty, !run.isEmpty {
+                run[run.count - 1].body.append(t)
+            }
+        }
+        if !run.isEmpty { runs.append(run) }
+        guard runs.reduce(0, { $0 + $1.count }) >= 5 else { return nil }
+        let big = runs.filter { $0.count >= 10 }
+        return (big.isEmpty ? runs : big).flatMap { $0 }.map { listItem($0.head, $0.body) }
+    }
+
+    /// 标题 = 冒号前（30 字内）或整行；内容 = 整条原文（梗的意思就在整条里）；关键词从标题里拆
+    static func listItem(_ head: String, _ body: [String]) -> [String: Any] {
+        var name = head
+        if let i = head.firstIndex(where: { $0 == "：" || $0 == ":" }), head.distance(from: head.startIndex, to: i) <= 30,
+           head.distance(from: head.startIndex, to: i) > 0 {
+            name = String(head[..<i])
+        }
+        let content = ([head] + body).joined(separator: "\n")
+        return ["keys": listKeys(name), "content": content, "comment": cleanTitle(String(name.prefix(20)))]
+    }
+
+    static let keySegments = try! NSRegularExpression(pattern: #"[/／→=＝，,、;；|\s]+|说成"#)
+    static let keyHoles = try! NSRegularExpression(pattern: #"\*+|[xX]{2,}|…+|\.{3,}|[？?！!。]"#)
+    static let keyParens = try! NSRegularExpression(pattern: #"[（(][^）)]*[）)]"#)
+    /// 太常见的词当关键词会句句都触发
+    static let commonWords: Set<String> = ["比如", "例如", "示例", "怎么", "什么", "没有", "知道", "可以", "我们", "你们", "他们",
+                                           "这个", "那个", "就是", "不是", "一个", "自己", "真的", "现在", "这期", "我的", "你的", "你看"]
+
+    /// 「这期神了/没绷住/破绷」「不按常理出牌→倒反天罡」「牛逼说成牛福」「你见过人**不」→ 拆成能在聊天里碰到的几截；
+    /// 括号里的说明、引号不算。带 ** / xx 占位的那截是句式，拆出来的碎片至少 3 个字（不然「那很」「我在」句句都触发）
+    static func listKeys(_ name: String) -> [String] {
+        var s = name.trimmingCharacters(in: invisible)
+        s = keyParens.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: " ")
+        s = s.filter { !"“”\"「」『』‘’'【】《》".contains($0) }
+        s = keySegments.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "\u{1}")
+        var seen = Set<String>(), out: [String] = []
+        for seg in s.split(separator: "\u{1}").map(String.init) {
+            let holed = keyHoles.stringByReplacingMatches(in: seg, range: NSRange(seg.startIndex..., in: seg), withTemplate: "\u{1}")
+            let minLen = holed == seg ? 2 : 3
+            for k in holed.split(separator: "\u{1}").map({ $0.trimmingCharacters(in: .whitespaces.union(invisible)) })
+            where k.count >= minLen && k.count <= 20 && !commonWords.contains(k) && !k.allSatisfy(\.isNumber)
+                && seen.insert(k.lowercased()).inserted {
+                out.append(k)
+            }
+        }
+        return Array(out.prefix(6))
     }
 
     static func block(_ ls: [String]) -> [String: Any]? {

@@ -16,9 +16,14 @@ struct LoreEntry: Decodable, Identifiable, Equatable {
     let createdBy: String
     let enabled: Bool
     let constant: Bool
+    var source: String? = nil        // 从哪个文件导进来的，同一个文件一组（10-14；旧 Host 没有这一项）
+    var occasional: Bool? = nil      // 偶尔想起：隔几轮随手抽一条递给它（10-14）
+
+    var group: String { source ?? "" }
+    var isOccasional: Bool { occasional ?? false }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, keywords, content, enabled, constant
+        case id, name, keywords, content, enabled, constant, source, occasional
         case companionID = "companion_id", createdBy = "created_by"
     }
 }
@@ -57,6 +62,22 @@ final class LoreStore: ObservableObject {
         try? await api?.send("DELETE", "lore/\(e.id)")
         entries.removeAll { $0.id == e.id }
     }
+
+    /// 一组一起改（10-14）：整组开 / 关偶尔想起，或者整组删掉；改完重新拉一遍
+    func batch(_ ids: [Int], occasional: Bool? = nil, delete: Bool = false) async {
+        error = nil
+        var body: [String: Any] = ["ids": ids]
+        if let occasional { body["occasional"] = occasional }
+        if delete { body["delete"] = true }
+        do {
+            try await api?.send("POST", "lore/batch", json: body)
+        } catch let e as APIError {
+            error = e.message
+        } catch {
+            self.error = String(localized: "没连上服务器，过会儿再试")
+        }
+        await load()
+    }
 }
 
 struct LoreRoomView: View {
@@ -80,7 +101,14 @@ struct LoreRoomView: View {
                 }
                 ForEach(groups, id: \.title) { g in
                     Section(g.title) {
-                        ForEach(g.items) { e in
+                        // 同一个文件导进来的折成一组（10-14：一百多条的梗清单），点进去整组管
+                        ForEach(sources(g.items), id: \.self) { src in
+                            let items = g.items.filter { $0.group == src }
+                            NavigationLink {
+                                LoreSourceView(store: store, source: src, companionID: items.first?.companionID, onEdit: { editing = LoreEditTarget(entry: $0) })
+                            } label: { sourceRow(src, items) }
+                        }
+                        ForEach(g.items.filter { $0.group.isEmpty }) { e in
                             Button { editing = LoreEditTarget(entry: e) } label: { row(e) }
                                 .buttonStyle(.plain)
                                 .swipeActions {
@@ -147,6 +175,22 @@ struct LoreRoomView: View {
         return out
     }
 
+    private func sources(_ items: [LoreEntry]) -> [String] {
+        var seen = Set<String>()
+        return items.map(\.group).filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private func sourceRow(_ src: String, _ items: [LoreEntry]) -> some View {
+        let occ = items.filter(\.isOccasional).count
+        return VStack(alignment: .leading, spacing: 4) {
+            Label(src, systemImage: "doc.text").font(Typo.sans(Typo.Size.body, .semibold)).foregroundStyle(theme.ink)
+            Text(occ == 0 ? String(localized: "\(items.count) 条 · 说到关键词才想起")
+                 : occ == items.count ? String(localized: "\(items.count) 条 · 都会偶尔想起")
+                 : String(localized: "\(items.count) 条 · \(occ) 条会偶尔想起"))
+                .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
+        }
+    }
+
     private func row(_ e: LoreEntry) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -157,6 +201,7 @@ struct LoreRoomView: View {
                         .background(theme.accentDeep.opacity(0.12), in: Capsule())
                 }
                 if e.constant { Image(systemName: "pin.fill").font(Typo.icon(11)).foregroundStyle(theme.inkDim) }
+                if e.isOccasional { Image(systemName: "sparkles").font(Typo.icon(11)).foregroundStyle(theme.inkDim) }
                 if !e.enabled { Text(String(localized: "已关")).font(Typo.sans(11)).foregroundStyle(theme.inkDim) }
             }
             Text(e.keywords.joined(separator: " · ")).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
@@ -185,6 +230,7 @@ struct LoreEditView: View {
     @State private var forWho = ""           // 联系人 id；空 = 所有人都知道
     @State private var enabled = true
     @State private var constant = false
+    @State private var occasional = false
     @State private var saving = false
 
     var body: some View {
@@ -205,6 +251,11 @@ struct LoreEditView: View {
                         Text(String(localized: "所有人都知道")).tag("")
                     }
                     Toggle(String(localized: "开着"), isOn: $enabled)
+                }
+                Section {
+                    Toggle(String(localized: "偶尔想起"), isOn: $occasional)
+                } footer: {
+                    Text(String(localized: "不用等说到关键词，隔几轮它会随手想起一条，自己拿来用。适合梗、口头禅。"))
                 }
                 Section {
                     Toggle(String(localized: "常驻"), isOn: $constant)
@@ -242,7 +293,7 @@ struct LoreEditView: View {
         store.error = nil
         if let e = entry {
             name = e.name; keywords = e.keywords.joined(separator: ", "); content = e.content
-            forWho = e.companionID?.lowercased() ?? ""; enabled = e.enabled; constant = e.constant
+            forWho = e.companionID?.lowercased() ?? ""; enabled = e.enabled; constant = e.constant; occasional = e.isOccasional
         } else {
             forWho = model.primaryCompanion?.id.uuidString.lowercased() ?? ""
         }
@@ -253,7 +304,74 @@ struct LoreEditView: View {
         defer { saving = false }
         let kw = keywords.trimmingCharacters(in: .whitespaces).isEmpty ? name : keywords
         let body: [String: Any] = ["name": name, "keywords": kw, "content": content, "enabled": enabled,
-                                   "constant": constant, "companion_id": forWho.isEmpty ? NSNull() : forWho]
+                                   "constant": constant, "occasional": occasional, "companion_id": forWho.isEmpty ? NSNull() : forWho]
         if await store.save(entry, body: body) { dismiss() }
+    }
+}
+
+/// 一组（同一个文件导进来的，10-14）：顶上总开关，下面一条条勾哪些会被偶尔想起
+struct LoreSourceView: View {
+    @EnvironmentObject private var theme: AppTheme
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: LoreStore
+    let source: String
+    let companionID: String?
+    let onEdit: (LoreEntry) -> Void
+    @State private var confirmDelete = false
+
+    private var items: [LoreEntry] { store.entries.filter { $0.group == source && $0.companionID == companionID } }
+
+    var body: some View {
+        List {
+            Section {
+                Toggle(String(localized: "偶尔想起"), isOn: Binding(
+                    get: { !items.isEmpty && items.allSatisfy(\.isOccasional) },
+                    set: { on in Task { await store.batch(items.map(\.id), occasional: on) } }))
+            } footer: {
+                Text(String(localized: "开着：不用等说到关键词，隔几轮它会随手想起其中一条，自己拿来用。关着：说到关键词才想起。也可以在下面一条条挑。"))
+            }
+            Section {
+                ForEach(items) { e in
+                    HStack(alignment: .top, spacing: 10) {
+                        Button {
+                            Task { _ = await store.save(e, body: ["occasional": !e.isOccasional]) }
+                        } label: {
+                            Image(systemName: e.isOccasional ? "checkmark.circle.fill" : "circle")
+                                .font(Typo.icon(18)).foregroundStyle(e.isOccasional ? theme.accentDeep : theme.inkFaint)
+                        }
+                        .buttonStyle(.plain)
+                        Button { onEdit(e) } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(e.name).font(Typo.sans(Typo.Size.body, .medium)).foregroundStyle(theme.ink)
+                                Text(e.keywords.joined(separator: " · ")).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim).lineLimit(1)
+                                Text(e.content).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint).lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .opacity(e.enabled ? 1 : 0.55)
+                    .swipeActions {
+                        Button(role: .destructive) { Task { await store.delete(e) } } label: {
+                            Label(String(localized: "删除"), systemImage: "trash")
+                        }
+                    }
+                }
+            } header: {
+                Text(String(localized: "勾上的会被偶尔想起"))
+            }
+            if let err = store.error { Text(err).foregroundStyle(.red) }
+            Section {
+                Button(String(localized: "删掉这一组（\(items.count) 条）"), role: .destructive) { confirmDelete = true }
+            }
+        }
+        .navigationTitle(source)
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(String(localized: "删掉「\(source)」这一组？"), isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button(String(localized: "删掉 \(items.count) 条"), role: .destructive) {
+                Task { await store.batch(items.map(\.id), delete: true); dismiss() }
+            }
+        }
     }
 }

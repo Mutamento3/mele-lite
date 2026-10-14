@@ -21,6 +21,9 @@ struct LoreImportSheet: View {
     @State private var forWho = ""
     @State private var saved = 0
     @State private var saving = false
+    @State private var occasional = false                 // 整份导成「偶尔想起」（10-14）
+    @State private var dropped: Set<String> = []          // 预览里点掉的（10-14：一长串梗清单，不要的点一下）
+    private var picked: [MeleLiteCore.LoreEntry] { file.entries.filter { !dropped.contains($0.id) } }
 
     var body: some View {
         NavigationStack {
@@ -33,9 +36,15 @@ struct LoreImportSheet: View {
                         ForEach(model.companions) { c in Text(c.name).tag(c.id.uuidString.lowercased()) }
                         Text(String(localized: "所有人都知道")).tag("")
                     }
-                } footer: { Text(file.name) }
+                    Toggle(String(localized: "偶尔想起"), isOn: $occasional)
+                } footer: {
+                    Text(String(localized: "开着：不用等说到关键词，隔几轮它会随手想起一条自己用（适合梗清单）。导进来以后点这一组还能一条条挑。") + "\n" + file.name)
+                }
                 Section {
                     ForEach(file.entries) { e in
+                        HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: dropped.contains(e.id) ? "circle" : "checkmark.circle.fill")
+                            .foregroundStyle(dropped.contains(e.id) ? theme.inkFaint : theme.accentDeep)
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
                                 Text(e.title).font(Typo.sans(Typo.Size.body, .medium)).foregroundStyle(theme.ink)
@@ -45,8 +54,12 @@ struct LoreImportSheet: View {
                             Text(e.keys.joined(separator: "、")).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim).lineLimit(1)
                             Text(e.content).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint).lineLimit(2)
                         }
+                        }
+                        .opacity(dropped.contains(e.id) ? 0.5 : 1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if dropped.contains(e.id) { dropped.remove(e.id) } else { dropped.insert(e.id) } }
                     }
-                }
+                } header: { Text(String(localized: "点一下不要这条")) }
                 if let err = store.error { Text(err).foregroundStyle(.red) }
             }
             .navigationTitle(String(localized: "导入世界书"))
@@ -54,8 +67,8 @@ struct LoreImportSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(String(localized: "取消")) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if saving { Text("\(saved)/\(file.entries.count)").foregroundStyle(theme.inkDim) }
-                    else { Button(String(localized: "导入")) { Task { await save() } }.disabled(file.entries.isEmpty) }
+                    if saving { Text("\(saved)/\(picked.count)").foregroundStyle(theme.inkDim) }
+                    else { Button(String(localized: "导入 \(picked.count) 条")) { Task { await save() } }.disabled(picked.isEmpty) }
                 }
             }
             .onAppear { forWho = model.primaryCompanion?.id.uuidString.lowercased() ?? "" }
@@ -65,9 +78,10 @@ struct LoreImportSheet: View {
     private func save() async {
         saving = true
         defer { saving = false }
-        for e in file.entries {
+        for e in picked {
             let body: [String: Any] = ["name": e.title, "keywords": e.keys.joined(separator: ", "), "content": e.content,
-                                       "enabled": e.enabled, "constant": e.constant,
+                                       "enabled": e.enabled, "constant": e.constant, "occasional": occasional && !e.constant,
+                                       "source": (file.name as NSString).deletingPathExtension,
                                        "companion_id": forWho.isEmpty ? NSNull() : forWho]
             guard await store.save(nil, body: body) else { return }    // 出错就停，前面的已经存好
             saved += 1

@@ -492,6 +492,10 @@ final class LocalBrain: @unchecked Sendable {
                                budgetChars: LocalEcho.historyCap)
         let extra = Self.injections(settings, recent: history.suffix(4).map(\.text).joined(separator: "\n"), turn: stored.count)
         if !extra.isEmpty { req.context += "\n\n" + extra }          // 每轮变的都进 context（缓存，10-04）
+        if group == nil, host.store.conversation(conv)?["incognito"] as? Bool != true {   // 偶尔想起（10-14）：隔几轮随手抽一条梗，它自己也会用
+            let occ = LocalRooms.occasionalLore(host.store, companion: comp["id"] as? String ?? "", conversation: conv, msgCount: stored.count, zh: zh)
+            if !occ.isEmpty { req.context += "\n\n" + occ }
+        }
         // 〔在读〕TA 正在读哪本、〔塔罗〕TA 刚让它解过的一局（一次性）
         // 小号不给：那是平常的你在读 / 在听 / 刚抽的牌
         let cidNow = comp["id"] as? String ?? ""

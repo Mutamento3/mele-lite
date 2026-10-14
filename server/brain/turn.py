@@ -505,6 +505,10 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         book = lore.pick(lore_all, [text] if wake else [prev_said, text, last_assistant], state, turn_no, lang)
         if book:
             before = [*before, book]
+        if not wake:                 # 偶尔想起（10-14）：隔几轮随手抽一条梗，它自己也会用
+            occ = lore.occasional(lore_all, state, turn_no, lang)
+            if occ:
+                before = [*before, occ]
         side = context_line.render(items, now, settings.tz, lang)
         if side and context_line.due(items, now, last_at=state.get("side_at"), last_key=state.get("side_key"),
                                      wake=bool(wake)):   # TA 那边：天气、在哪、日程、步数、快捷指令（09-28）；不是每轮都给

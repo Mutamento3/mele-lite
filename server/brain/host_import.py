@@ -304,10 +304,12 @@ async def _rooms(pool, acc: UUID, rooms: dict, *, now: datetime, embedder, files
             if not ok or not str(it.get("content") or "").strip():
                 return False
             await pool.execute("""INSERT INTO lore (account_id, companion_id, name, keywords, content, created_by, enabled,
-                                  constant, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)""",
+                                  constant, source, occasional, created_at, updated_at)
+                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)""",
                                acc, c, str(it.get("name") or ""), [str(k) for k in it.get("keywords") or []],
                                str(it["content"]), "ai" if it.get("created_by") == "ai" else "user",
-                               it.get("enabled", True) is not False, bool(it.get("constant")), now)
+                               it.get("enabled", True) is not False, bool(it.get("constant")),
+                               str(it.get("source") or "")[:80], bool(it.get("occasional")), now)
         elif kind == "favorites":
             c, ok = comp(it)
             conv = _uuid(it.get("conversation_id"))

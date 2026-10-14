@@ -9,6 +9,8 @@
 - 常驻的（导入的角色卡用）每轮都在，放进底子吃缓存。"""
 from __future__ import annotations
 
+import random
+
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,7 +21,7 @@ NAME_MAX, CONTENT_MAX = 40, 2000
 KEYWORDS_MAX, KEYWORD_MIN = 10, 2
 COOLDOWN_TURNS = 20
 TURN_CHARS = 2000          # 一轮最多递这么多字，放不下的下一轮再说
-_COLS = "id, account_id, companion_id, name, keywords, content, created_by, enabled, constant, created_at, updated_at"
+_COLS = "id, account_id, companion_id, name, keywords, content, created_by, enabled, constant, source, occasional, created_at, updated_at"
 
 _HEAD = {"zh": "〔世界书〕", "en": "〔Lore〕"}
 _ALWAYS_HEAD = {"zh": "〔世界书 · 一直记着的〕", "en": "〔Lore · always on〕"}
@@ -39,13 +41,15 @@ class Entry:
     created_by: str
     enabled: bool
     constant: bool
+    source: str = ""                 # 从哪个文件导进来的（同一个文件一组，10-14）
+    occasional: bool = False         # 偶尔想起：隔几轮随手抽一条递给它（10-14）
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     def as_dict(self) -> dict:
         return {"id": self.id, "companion_id": str(self.companion_id) if self.companion_id else None, "name": self.name,
                 "keywords": list(self.keywords), "content": self.content, "created_by": self.created_by,
-                "enabled": self.enabled, "constant": self.constant,
+                "enabled": self.enabled, "constant": self.constant, "source": self.source, "occasional": self.occasional,
                 "updated_at": self.updated_at.isoformat() if self.updated_at else None}
 
 
@@ -106,16 +110,17 @@ def _entry(r) -> Entry:
 
 
 async def add(pool, account: UUID, *, companion_id: UUID | None, name: str, keywords, content: str,
-              created_by: str, enabled: bool = True, constant: bool = False) -> Entry:
+              created_by: str, enabled: bool = True, constant: bool = False, source: str = "",
+              occasional: bool = False) -> Entry:
     if created_by not in ("user", "ai"):
         raise ValueError("created_by 只能是 user / ai")
     name, kws, content = _clean_name(name), _clean_keywords(keywords), _clean_content(content)
     if await pool.fetchval("SELECT count(*) FROM lore WHERE account_id = $1", account) >= MAX_ENTRIES:
         raise ValueError(f"世界书最多 {MAX_ENTRIES} 条")
     r = await pool.fetchrow(
-        f"""INSERT INTO lore (account_id, companion_id, name, keywords, content, created_by, enabled, constant)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {_COLS}""",
-        account, companion_id, name, kws, content, created_by, enabled, constant)
+        f"""INSERT INTO lore (account_id, companion_id, name, keywords, content, created_by, enabled, constant, source, occasional)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING {_COLS}""",
+        account, companion_id, name, kws, content, created_by, enabled, constant, _clean_source(source), bool(occasional))
     return _entry(r)
 
 
@@ -123,20 +128,40 @@ _UNSET = object()
 
 
 async def update(pool, account: UUID, entry_id: int, *, name=None, keywords=None, content=None, enabled=None,
-                 constant=None, companion_id=_UNSET) -> Entry | None:
+                 constant=None, companion_id=_UNSET, occasional=None) -> Entry | None:
     e = await get(pool, account, entry_id)
     if e is None:
         return None
     r = await pool.fetchrow(
         f"""UPDATE lore SET name = $3, keywords = $4, content = $5, enabled = $6, constant = $7, companion_id = $8,
-                           updated_at = now()
+                           occasional = $9, updated_at = now()
             WHERE id = $1 AND account_id = $2 RETURNING {_COLS}""",
         entry_id, account, e.name if name is None else _clean_name(name),
         e.keywords if keywords is None else _clean_keywords(keywords),
         e.content if content is None else _clean_content(content),
         e.enabled if enabled is None else bool(enabled), e.constant if constant is None else bool(constant),
-        e.companion_id if companion_id is _UNSET else companion_id)
+        e.companion_id if companion_id is _UNSET else companion_id,
+        e.occasional if occasional is None else bool(occasional))
     return _entry(r)
+
+
+def _clean_source(source) -> str:
+    return " ".join(str(source or "").split())[:80]
+
+
+async def batch(pool, account: UUID, ids: list[int], *, occasional=None, delete: bool = False) -> int:
+    """一组一起改（10-14）：整组开 / 关偶尔想起，或者整组删掉。返回动了几条。"""
+    ids = [int(i) for i in ids]
+    if not ids:
+        return 0
+    if delete:
+        r = await pool.execute("DELETE FROM lore WHERE account_id = $1 AND id = ANY($2::bigint[])", account, ids)
+    elif occasional is not None:
+        r = await pool.execute("UPDATE lore SET occasional = $3, updated_at = now() WHERE account_id = $1 AND id = ANY($2::bigint[])",
+                               account, ids, bool(occasional))
+    else:
+        return 0
+    return int(r.split()[-1])
 
 
 async def delete(pool, account: UUID, entry_id: int) -> bool:
@@ -210,3 +235,27 @@ def always_block(entries: list[Entry], lang: str) -> str:
         return ""
     lang = "zh" if lang == "zh" else "en"
     return "\n".join([_ALWAYS_HEAD[lang], *(f"【{e.name}】{e.content}" for e in on)])
+
+
+# ── 偶尔想起（10-14 内测：梗清单想让它自己也会用，又不想每轮都带一百多条） ──
+
+OCCASIONAL_EVERY = 4        # 隔几轮抽一条
+OCCASIONAL_RECENT = 12      # 最近抽过的这么多条不重复
+_OCC_HEAD = {"zh": "〔脑子里冒出来的〕", "en": "〔Popped into your head〕"}
+_OCC_NOTE = {"zh": "（这是你平时会用的。聊到合适的地方想用就用，换成你自己的说法。）",
+             "en": "(Something you'd normally use. If it fits the moment, use it — in your own words.)"}
+
+
+def occasional(entries: list[Entry], state: dict, turn_no: int, lang: str, rng=random) -> str:
+    """隔 OCCASIONAL_EVERY 轮从「偶尔想起」的里抽一条；最近抽过的跳过。state 记 lore_occ_at / lore_occ_recent。"""
+    pool = [e for e in entries if e.enabled and e.occasional and not e.constant]
+    last = state.get("lore_occ_at")
+    if not pool or (last is not None and turn_no - int(last) < OCCASIONAL_EVERY):
+        return ""
+    recent = [int(i) for i in state.get("lore_occ_recent") or []]
+    fresh = [e for e in pool if e.id not in recent] or pool
+    e = rng.choice(fresh)
+    state["lore_occ_at"] = turn_no
+    state["lore_occ_recent"] = ([*recent, e.id])[-min(OCCASIONAL_RECENT, max(len(pool) - 1, 0)):] if len(pool) > 1 else []
+    lang = "zh" if lang == "zh" else "en"
+    return "\n".join([_OCC_HEAD[lang], f"【{e.name}】{e.content}", _OCC_NOTE[lang]])

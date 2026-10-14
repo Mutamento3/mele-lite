@@ -32,21 +32,32 @@ async def list_lore(companion_id: str = "", acc: UUID = Depends(account), a: Api
 
 @router.post("/lore", status_code=201)
 async def add_lore(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
-    """{name, keywords: [..] 或 "a, b", content, companion_id?（空 = 所有人）, enabled?, constant?}"""
+    """{name, keywords: [..] 或 "a, b", content, companion_id?（空 = 所有人）, enabled?, constant?, source?, occasional?}"""
     cid = await _target(a, acc, body)
     try:
         e = await L.add(a.deps.pool, acc, companion_id=cid, name=body.get("name"), keywords=body.get("keywords"),
                         content=body.get("content"), created_by="user", enabled=body.get("enabled", True) is not False,
-                        constant=bool(body.get("constant")))
+                        constant=bool(body.get("constant")), source=body.get("source") or "",
+                        occasional=bool(body.get("occasional")))
     except ValueError as ex:
         raise HTTPException(400, str(ex)) from ex
     return e.as_dict()
 
 
+@router.post("/lore/batch")
+async def batch_lore(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """一组一起改（10-14）：{ids: [..], occasional: true/false} 或 {ids: [..], delete: true}"""
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+        raise HTTPException(400, "ids 要是数字列表")
+    n = await L.batch(a.deps.pool, acc, ids, occasional=body.get("occasional"), delete=body.get("delete") is True)
+    return {"changed": n}
+
+
 @router.patch("/lore/{entry_id}")
 async def patch_lore(entry_id: int, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """改一部分；带 companion_id 键才改给谁（null = 所有人）。"""
-    kw = {k: body[k] for k in ("name", "keywords", "content", "enabled", "constant") if k in body}
+    kw = {k: body[k] for k in ("name", "keywords", "content", "enabled", "constant", "occasional") if k in body}
     if "companion_id" in body:
         kw["companion_id"] = await _target(a, acc, body)
     try:

@@ -864,3 +864,7 @@ CREATE TABLE IF NOT EXISTS group_members (
 CREATE INDEX IF NOT EXISTS group_members_companion_idx ON group_members (companion_id);
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_id UUID;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_name TEXT NOT NULL DEFAULT '';
+-- 世界书分组 + 偶尔想起（10-14 内测：一百多条的梗清单 txt）：source = 从哪个文件导进来的（同一个文件一组）；
+-- occasional = 不等说到关键词，隔几轮随手抽一条递给它，让它自己也会用
+ALTER TABLE lore ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
+ALTER TABLE lore ADD COLUMN IF NOT EXISTS occasional BOOLEAN NOT NULL DEFAULT false;

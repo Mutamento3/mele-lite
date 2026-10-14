@@ -9,6 +9,7 @@ enum LocalRooms {
         switch (r.method, p.first ?? "", p.count) {
         case ("GET", "lore", 1): return .json(lore(host.store, companion: r.query["companion_id"]))
         case ("POST", "lore", 1): return addLore(host.store, r.json)
+        case ("POST", "lore", 2) where p[1] == "batch": return batchLore(host.store, r.json)
         case ("PATCH", "lore", 2): return patchLore(host.store, Int(p[1]), r.json)
         case ("DELETE", "lore", 2): return deleteLore(host.store, Int(p[1]))
         // 收藏夹
@@ -94,6 +95,7 @@ enum LocalRooms {
         let e: [String: Any] = ["id": s.nextID("lore"), "companion_id": cid ?? NSNull(), "name": name.isEmpty ? String(content.prefix(12)) : name,
                                 "keywords": keywords(b["keywords"]), "content": content, "created_by": "user",
                                 "enabled": b["enabled"] as? Bool ?? true, "constant": b["constant"] as? Bool ?? false,
+                                "source": String((b["source"] as? String ?? "").prefix(80)), "occasional": b["occasional"] as? Bool ?? false,
                                 "updated_at": LocalStore.iso(Date())]
         s.saveCollection("lore", s.collection("lore") + [e])
         return .json(e, status: 201)
@@ -102,12 +104,50 @@ enum LocalRooms {
     static func patchLore(_ s: LocalStore, _ id: Int?, _ b: [String: Any]) -> LocalResponse {
         var all = s.collection("lore")
         guard let id, let i = all.firstIndex(where: { ($0["id"] as? Int) == id }) else { return .error(404, String(localized: "没有这一条")) }
-        for k in ["name", "content", "enabled", "constant"] where b[k] != nil { all[i][k] = b[k] }
+        for k in ["name", "content", "enabled", "constant", "occasional"] where b[k] != nil { all[i][k] = b[k] }
         if b["keywords"] != nil { all[i]["keywords"] = keywords(b["keywords"]) }
         if b.keys.contains("companion_id") { all[i]["companion_id"] = (b["companion_id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? NSNull() }
         all[i]["updated_at"] = LocalStore.iso(Date())
         s.saveCollection("lore", all)
         return .json(all[i])
+    }
+
+    /// 一组一起改（10-14，照 Host /lore/batch）：{ids, occasional} 或 {ids, delete: true}
+    static func batchLore(_ s: LocalStore, _ b: [String: Any]) -> LocalResponse {
+        guard let ids = b["ids"] as? [Int] else { return .error(400, "ids 要是数字列表") }
+        let set = Set(ids)
+        var all = s.collection("lore"), n = 0
+        if b["delete"] as? Bool == true {
+            n = all.filter { set.contains($0["id"] as? Int ?? -1) }.count
+            all.removeAll { set.contains($0["id"] as? Int ?? -1) }
+        } else if let on = b["occasional"] as? Bool {
+            for i in all.indices where set.contains(all[i]["id"] as? Int ?? -1) {
+                all[i]["occasional"] = on; all[i]["updated_at"] = LocalStore.iso(Date()); n += 1
+            }
+        }
+        s.saveCollection("lore", all)
+        return .json(["changed": n])
+    }
+
+    /// 偶尔想起（10-14，照 Host lore.occasional）：隔几轮从开了「偶尔想起」的里抽一条，最近抽过的跳过。
+    /// 进度记在窗口上（lore_occ = {at: 第几条消息, recent: [id]}）
+    static let occasionalEveryMsgs = 8          // 一来一回两条消息，≈ 隔 4 轮
+    static func occasionalLore(_ s: LocalStore, companion: String, conversation conv: String, msgCount: Int, zh: Bool) -> String {
+        let pool = lore(s, companion: companion).filter {
+            ($0["occasional"] as? Bool ?? false) && ($0["enabled"] as? Bool ?? true) && !($0["constant"] as? Bool ?? false)
+        }
+        guard !pool.isEmpty, var c = s.conversation(conv) else { return "" }
+        let st = c["lore_occ"] as? [String: Any] ?? [:]
+        if let at = st["at"] as? Int, msgCount - at < occasionalEveryMsgs, msgCount >= at { return "" }
+        let recent = st["recent"] as? [Int] ?? []
+        let fresh = pool.filter { !recent.contains($0["id"] as? Int ?? -1) }
+        guard let e = (fresh.isEmpty ? pool : fresh).randomElement() else { return "" }
+        let keep = min(12, pool.count - 1)
+        c["lore_occ"] = ["at": msgCount, "recent": keep > 0 ? Array((recent + [e["id"] as? Int ?? -1]).suffix(keep)) : []]
+        s.saveConversation(c)
+        let line = "【\(e["name"] as? String ?? "")】\(e["content"] as? String ?? "")"
+        return zh ? "〔脑子里冒出来的〕\n\(line)\n（这是你平时会用的。聊到合适的地方想用就用，换成你自己的说法。）"
+                  : "〔Popped into your head〕\n\(line)\n(Something you'd normally use. If it fits the moment, use it — in your own words.)"
     }
 
     static func deleteLore(_ s: LocalStore, _ id: Int?) -> LocalResponse {

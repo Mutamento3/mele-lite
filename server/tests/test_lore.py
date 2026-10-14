@@ -186,3 +186,41 @@ async def test_api_crud_isolated_and_exported(pool):
                                             "companion_id": comp["id"]})).status_code == 404     # 别人的联系人
     async with e.client(t) as c:
         assert (await c.delete(f"/lore/{lid}")).status_code == 204
+
+
+def test_occasional_every_few_turns_without_repeats():
+    import random
+    es = [entry(i, f"梗{i}", [f"梗梗{i}"], f"意思{i}") for i in range(1, 4)]
+    for e in es:
+        e.occasional = True
+    es.append(entry(9, "关着的", ["关关"], "不抽", enabled=False))
+    es[-1].occasional = True
+    st, rng, got = {}, random.Random(1), []
+    for turn in range(1, 30):
+        block = L.occasional(es, st, turn, "zh", rng)
+        if block:
+            got.append((turn, block.split("\n")[1]))
+    assert [t for t, _ in got] == list(range(1, 30, L.OCCASIONAL_EVERY))       # 隔 4 轮一条
+    names = [b for _, b in got]
+    assert all(names[i] != names[i + 1] and names[i] != names[i + 2] for i in range(len(names) - 2))  # 三条轮着，不连着重复
+    assert "关着的" not in "".join(names)
+    assert L.occasional([entry(1, "普通", ["普通"])], {}, 1, "zh") == ""          # 没开偶尔想起的不抽
+    assert L.occasional(es[:1], {}, 1, "en").startswith("〔Popped into your head〕")
+
+
+async def test_api_source_occasional_and_batch(pool):
+    from test_api import Env
+
+    e = Env(pool)
+    t = await e.login()
+    async with e.client(t) as c:
+        ids = [(await c.post("/lore", json={"name": f"梗{i}", "keywords": f"梗梗{i}", "content": "c",
+                                            "source": "小满的梗清单", "occasional": i == 0})).json()["id"] for i in range(3)]
+        got = (await c.get("/lore")).json()
+        assert {x["source"] for x in got} == {"小满的梗清单"} and [x["occasional"] for x in got] == [True, False, False]
+        assert (await c.post("/lore/batch", json={"ids": ids, "occasional": True})).json() == {"changed": 3}
+        assert all(x["occasional"] for x in (await c.get("/lore")).json())
+        assert (await c.patch(f"/lore/{ids[0]}", json={"occasional": False})).json()["occasional"] is False
+        assert (await c.post("/lore/batch", json={"ids": ["x"]})).status_code == 400
+        assert (await c.post("/lore/batch", json={"ids": ids[:2], "delete": True})).json() == {"changed": 2}
+        assert [x["id"] for x in (await c.get("/lore")).json()] == ids[2:]
