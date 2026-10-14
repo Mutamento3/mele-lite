@@ -96,7 +96,7 @@ public enum LoreImport {
         return blocks.compactMap(block)
     }
 
-    // MARK: 编号清单（10-14 内测：一份「热梗世界书」txt，一百多个梗一行一个编号，前面还有两小段 1. 2. 3. 的用法规则）
+    // MARK: 编号清单（10-14 内测：一份梗清单 txt，一百多个梗一行一个编号，前面还有两小段 1. 2. 3. 的用法规则）
 
     static let numberedLine = try! NSRegularExpression(pattern: #"^\s*(\d{1,3})\s*[.、．)）]\s*(.*)$"#)
     static let invisible = CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{FEFF}")
