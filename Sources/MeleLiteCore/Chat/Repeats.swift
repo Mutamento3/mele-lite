@@ -41,4 +41,12 @@ public enum Repeats {
         let kept = bubbles.filter { b in !recent.contains { similarity($0, b) >= threshold } }
         return kept.isEmpty ? Array(bubbles.prefix(1)) : kept
     }
+
+    /// 同一条回话里自己跟自己重复（10-14 内测）：它先把话说完、顺手调个工具（比如 go_to），工具回来又换几个字说一遍，
+    /// 两段拼在一起发出去。后面的气泡跟这条回话里前面已经留下的几乎一样（≥ threshold）就丢，第一次说的留着
+    public static func dropEchoes(_ bubbles: [String], threshold: Double = 0.75) -> [String] {
+        var kept: [String] = []
+        for b in bubbles where !kept.contains(where: { similarity($0, b) >= threshold }) { kept.append(b) }
+        return kept
+    }
 }

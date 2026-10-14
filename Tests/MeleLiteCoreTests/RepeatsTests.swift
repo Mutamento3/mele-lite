@@ -39,4 +39,15 @@ import Testing
         #expect(Repeats.dropRepeated(["等天擦黑，河边灯一亮，我们再去走走。不急着起。"], recent: recent) == ["等天擦黑，河边灯一亮，我们再去走走。不急着起。"])
         #expect(Repeats.dropRepeated(["好", "嗯"], recent: ["好"]) == ["嗯"])
     }
+
+    @Test func echoesInsideOneReplyAreDropped() {
+        // 调工具前说了一遍、工具回来换几个字又说一遍
+        let reply = ["小满我到楼下了！\n\n伞挂在门把上了 还有你爱吃的烤红薯 趁热吃！",
+                     "那我先回去啦 明天见",
+                     "小满我到楼下了！\n\n伞挂门把上了 还有你爱吃的热烤红薯 趁热吃！",
+                     "你拿到红薯了吗 记得趁热"]
+        #expect(Repeats.dropEchoes(reply) == [reply[0], reply[1], reply[3]])
+        #expect(Repeats.dropEchoes(["好", "嗯", "好"]) == ["好", "嗯"])
+        #expect(Repeats.dropEchoes([]) == [])
+    }
 }

@@ -676,6 +676,13 @@ final class LocalBrain: @unchecked Sendable {
                         say(ev)
                     }
                 }
+                // 调工具前已经把话说完了（10-14 内测：说完「我到门口了」顺手 go_to，回来换几个字又说一遍，两段一起发出去）。
+                // 告诉它那段 TA 会看到，工具回来只接着说新的
+                if !results.isEmpty, !InnerVoice.split(Monologue.split(ModelNoise.strip(said)).body).body
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    results[results.count - 1].content += zh ? "\n（你调工具前写的那段话 TA 会看到，不用再说一遍；接着说新的就好。）"
+                        : "\n(They'll see what you wrote before calling the tool — no need to say it again; just go on with anything new.)"
+                }
                 req.turns.append(ChatTurn(role: .assistant, text: said, toolCalls: calls, raw: raw))
                 req.turns.append(ChatTurn(role: .user, text: "", toolResults: results))
             }
@@ -727,7 +734,8 @@ final class LocalBrain: @unchecked Sendable {
         let recentSaid = stored.filter { ($0["role"] as? String) == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf) }
             .suffix(6).flatMap { Bubbles.split($0["text"] as? String ?? "", cap: nil, offline: long) }
         let split = Bubbles.split(parsed.text, cap: settings["max_bubbles"] as? Int ?? 6, offline: long)
-        let bubbles = Repeats.dropRepeated(split, recent: recentSaid)
+        // 同一条里自己跟自己重复的也丢（10-14 内测：调工具前后各说一遍）
+        let bubbles = Repeats.dropRepeated(Repeats.dropEchoes(split), recent: recentSaid)
         var finalText = bubbles.count == split.count ? parsed.text : bubbles.joined(separator: "\n\n")
         var clips: [String: Any] = [:]
         for (i, b) in bubbles.enumerated() {
