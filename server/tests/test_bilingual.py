@@ -31,25 +31,25 @@ async def _on(pool, user, by="key"):
                                              "bilingual": True, "bilingual_by": by, "thinking_mode": "native"})
 
 
-async def test_turn_translates_both_sides_with_key(pool, user_a):
-    m = FakeModel(['["Did you know? I think I\'m in love with someone..."]',      # 你那句先翻成英文
-                   "...Right.\n\nKeegan? Or that giant child?",                    # TA 用英文回
+async def test_turn_translates_only_ta_with_key(pool, user_a):
+    """10-15 内测：用户不要翻自己那句——你的话原样发给 TA、泡上不加译文；只翻 TA 的。"""
+    m = FakeModel(["...Right.\n\nKeegan? Or that giant child?",                    # TA 用英文回
                    '["……对。", "基根？还是那个巨大的孩子？"]'])                       # 再翻 TA 的两泡
     await _on(pool, user_a)
     ev = await turn(make_deps(pool, m), user_a, "你知道吗？我想我爱上某个人了…")
     bubbles = of(ev, "bubble")
     assert [b["text"] for b in bubbles] == ["...Right.", "Keegan? Or that giant child?"]
     assert [b.get("translation") for b in bubbles] == ["……对。", "基根？还是那个巨大的孩子？"]
-    assert "Did you know?" in m.requests[1].messages[-1].text and "你知道吗" not in m.requests[1].messages[-1].text
-    assert "〔双语〕" in m.requests[1].messages[-1].text
+    assert "你知道吗" in m.requests[0].messages[-1].text and "〔双语〕" in m.requests[0].messages[-1].text
+    assert of(ev, "user_translation") == []
     msgs = await archive.recent(pool, user_a, 5)
     me, ta = [x for x in msgs if x.role == "user"][-1], [x for x in msgs if x.role == "assistant"][-1]
-    assert me.text == "你知道吗？我想我爱上某个人了…" and me.translations == ["Did you know? I think I'm in love with someone..."]
+    assert me.text == "你知道吗？我想我爱上某个人了…" and me.translations is None
     assert ta.text == "...Right.\n\nKeegan? Or that giant child?" and ta.translations == ["……对。", "基根？还是那个巨大的孩子？"]
 
 
 async def test_self_mode_cuts_translation_lines(pool, user_a):
-    m = FakeModel(['["What? Why?"]', "What?\n〔译〕什么？\n\nWhy?\n〔译〕为什么？"])
+    m = FakeModel(["What?\n〔译〕什么？\n\nWhy?\n〔译〕为什么？"])
     await _on(pool, user_a, by="self")
     ev = await turn(make_deps(pool, m), user_a, "什么？为什么？")
     assert [(b["text"], b.get("translation")) for b in of(ev, "bubble")] == [("What?", "什么？"), ("Why?", "为什么？")]
@@ -58,18 +58,7 @@ async def test_self_mode_cuts_translation_lines(pool, user_a):
 
 
 async def test_translation_failure_shows_original(pool, user_a):
-    m = FakeModel(["没翻成", "Sure."])
+    m = FakeModel(["Sure.", "不是 JSON"])
     await _on(pool, user_a)
-    m.script.append("还是不是 JSON")
     ev = await turn(make_deps(pool, m), user_a, "好吗")
     assert [(b["text"], b.get("translation")) for b in of(ev, "bubble")] == [("Sure.", None)]
-    me = [x for x in await archive.recent(pool, user_a, 5) if x.role == "user"][-1]
-    assert me.translations is None and "好吗" in m.requests[1].messages[-1].text
-
-
-async def test_user_translation_event(pool, user_a):
-    m = FakeModel(['["Hi."]', "Hey."])
-    await _on(pool, user_a)
-    m.script.append('["嘿。"]')
-    ev = await turn(make_deps(pool, m), user_a, "嗨")
-    assert of(ev, "user_translation")[0]["translations"] == ["Hi."]

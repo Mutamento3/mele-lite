@@ -410,11 +410,6 @@ final class LocalBrain: @unchecked Sendable {
         }
         // 回声（10-04）：卷进账本的那些不再原样进上下文，账本放 system 里
         let rolledUpto = LocalEcho.rolledUpto(host.store, conv)
-        if nudge == nil, LocalBilingual.active(settings, group: group != nil) {     // 双语气泡（10-15）：你那句先翻成 TA 那种语言
-            if let ts = await LocalBilingual.translateLastUser(host, conv: conv, comp: comp, settings: settings, zh: zh) {
-                say(["type": "user_translation", "translations": ts])         // App 把它补到你刚发的那条上
-            }
-        }
         var stored = host.store.messages(conv).filter { ($0["id"] as? Int ?? 0) > rolledUpto }
         let uname = Self.userLabel(settings, zh: zh)
         // 群：后来拉进来的——开关开着看进群前最近 30 条（还没开过口就垫一句「刚被拉进群」），关着只看进群以后的

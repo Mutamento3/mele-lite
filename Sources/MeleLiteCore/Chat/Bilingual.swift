@@ -1,6 +1,6 @@
 import Foundation
 
-/// 双语气泡（10-15 Aporia：别家截图那种，TA 说英文、每泡下面一行中文；你的泡也双语）。
+/// 双语气泡（10-15 Aporia：别家截图那种，TA 说英文、每泡下面一行中文；你那句不翻——10-15 内测说不要）。
 /// 译文跟气泡一一对应存一列 translations；历史里你的话用翻好的那版，TA 的话只有原文。Host 那份是 server/brain/bilingual.py。
 public enum Bilingual {
     public static let mark = "〔译〕"

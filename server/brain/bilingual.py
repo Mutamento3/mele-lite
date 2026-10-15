@@ -1,7 +1,7 @@
-"""双语气泡（10-15 Aporia：别家截图那种，TA 说英文、每泡下面一行中文；你的泡也双语）。
+"""双语气泡（10-15 Aporia：别家截图那种，TA 说英文、每泡下面一行中文；你那句不翻——内测说不要）。
 TA 设定里开：TA 说什么话（bilingual_lang）、译成什么（bilingual_to，空 = App 语言）、
 译文谁写（bilingual_by：key = 钥匙串「翻译」那把翻，便宜；self = TA 每泡自己写一行〔译〕）。
-译文跟气泡一一对应存一列 translations；历史里你的话用翻好的那版，TA 的话只有原文，译文不进上下文。
+译文跟气泡一一对应存一列 translations；TA 的话只有原文进上下文（第 50 版翻过的你那几句，历史里还用翻好的那版）。
 Lite 那份是 ios/Lite/LocalBilingual.swift，改一边改另一边。"""
 from __future__ import annotations
 

@@ -220,3 +220,12 @@ def test_backlog_batches_only_when_far_over_and_cut_before_user(monkeypatch):
     got = ledger.backlog_batches(msgs, high_water=1)
     assert [[m.id for m in b] for b in got] == [[1, 2, 3, 4]]            # 切在用户开口前，剩下的不超线就停
     assert ledger.backlog_batches(convo(4), high_water=1) == []
+
+
+def test_worth_rolling_needs_a_real_batch(monkeypatch):
+    """10-15：固定部分自己就超过记性长度时，别每轮为最老的两句卷一次；要卷的攒够记性长度的四分之一再卷。"""
+    monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
+    msgs = convo(10)                                                     # 留最后两条，要卷 8 条 ≈ 24 token
+    assert ledger.worth_rolling(msgs, high_water=96)
+    assert not ledger.worth_rolling(msgs, high_water=200)
+    assert not ledger.worth_rolling(convo(2), high_water=1)              # 只有一来一回，没东西可卷

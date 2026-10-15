@@ -623,7 +623,7 @@ struct CompanionSettingsView: View {
 
     /// 本机的日记（10-05）：打开 App 时补写昨天的，所以不用灰着。
     /// 10-12：别的联系人也能写，开关是 diary_also、默认关（主联系人还是 diary_on、默认开）
-    /// 双语气泡（10-15）：原文在上、译文在下，你的泡也双语
+    /// 双语气泡（10-15）：TA 的泡原文在上、译文在下；你那句不翻
     private var bilingual: some View {
         Tile {
             Toggle(isOn: store.s("bilingual", false)) {
@@ -643,7 +643,7 @@ struct CompanionSettingsView: View {
                 } label: { Text("译文谁写").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink) }
             }
         } header: { GlassHeader("双语") } footer: {
-            Text("TA 一直用选的语言说话，每个气泡下面一行译文；你照常打字，发出去会先翻成 TA 的语言，你的原话留在下面。「翻译钥匙」用钥匙串里勾了「翻译」的那把（没勾就用聊天那把），每句多一次便宜的调用；「TA 自己写」不多调用，但译文是聊天模型写的，聊天模型贵的话更花钱。群聊里不开。")
+            Text("TA 一直用选的语言说话，每个气泡下面一行译文；你照常打字，原话发给 TA，不翻。「翻译钥匙」用钥匙串里勾了「翻译」的那把（没勾就用聊天那把），每句多一次便宜的调用；「TA 自己写」不多调用，但译文是聊天模型写的，聊天模型贵的话更花钱。群聊里不开。")
         }
     }
 

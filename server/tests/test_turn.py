@@ -225,6 +225,21 @@ async def test_rolls_the_ledger_when_context_is_full(pool, user_a, monkeypatch):
     assert m.requests[4].system[1].text.startswith("〔账本〕") and "〔腔调样本〕" in m.requests[4].system[1].text
 
 
+async def test_big_fixed_part_does_not_roll_every_turn(pool, user_a, monkeypatch):
+    """10-15 内测（搬家过来）：「开头每轮都 5 万 token，一直在卷」。人设 / 说明书这些固定的部分自己就超过记性长度，
+    卷账本只能卷聊天记录、怎么卷都降不下来——原来每轮都卷最老的两句（每轮多一次挑记忆 + 写账）。
+    现在攒够记性长度的四分之一再卷。"""
+    monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
+    m = FakeModel(["好", "嗯", "是呀"])
+    d = make_deps(pool, m)
+    await turn(d, user_a, "在吗")
+    fixed = m.requests[0].estimated_prompt()
+    await archive.save_settings(pool, user_a, {"memory_length": fixed // 2})     # 固定部分就超了记性长度
+    ev = await turn(d, user_a, "今天好热") + await turn(d, user_a, "去游泳吧")
+    assert of(ev, "ledger") == [] and len(m.requests) == 3                      # 没为两三句话专门卷一次
+    assert len(await archive.unrolled(pool, user_a)) == 6
+
+
 async def test_roll_ages_old_days_and_drops_ancient_ones(pool, user_a, monkeypatch):
     monkeypatch.setattr(ledger, "KEEP_COUNT", 2)
     yesterday, ancient = date(2026, 9, 25), date(2026, 9, 12)
@@ -254,6 +269,11 @@ async def test_bad_ledger_keeps_history_and_counts_failures(pool, user_a, monkey
     assert len(await archive.unrolled(pool, user_a)) == 4
     assert await archive.get_ledger(pool, user_a) == {}
     assert (await archive.get_state(pool, user_a))["ledger_fails"] == 1
+    m.script += ["好呀", "", "TA 中了彩票。", "TA 去了火星。"]
+    await turn(d, user_a, "晚安")
+    pick = m.requests[-3]                                                      # 又写不动：挑记忆只挑上次没挑过的那段
+    assert "游得开心吗" in pick.messages[-1].text and "芒果" not in pick.messages[-1].text
+    assert (await archive.get_state(pool, user_a))["ledger_fails"] == 2
 
 
 async def test_users_do_not_see_each_other(pool, user_a, user_b):

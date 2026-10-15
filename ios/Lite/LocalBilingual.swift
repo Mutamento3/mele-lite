@@ -3,7 +3,7 @@ import Foundation
 import MeleLiteCore
 
 /// 双语气泡（10-15）：TA 设定里开。译文谁写：key = 钥匙串「翻译」那把翻（便宜，默认）；self = TA 每泡自己写〔译〕。
-/// 你那句开口前先翻成 TA 那种语言，存在你那条消息的 translations 上；TA 的几泡说完再翻（或切下 TA 写的〔译〕）。
+/// 你那句不翻（10-15 内测：用户不要）；TA 的几泡说完再翻（或切下 TA 写的〔译〕），存在那条消息的 translations 上。
 enum LocalBilingual {
     static func active(_ s: [String: Any], group: Bool) -> Bool { (s["bilingual"] as? Bool ?? false) && !group }
 
@@ -37,26 +37,6 @@ enum LocalBilingual {
         do { for try await e in makeClient(cfg, key: key).stream(req) { if case .text(let t) = e { out += t } } }
         catch { NSLog("[bilingual] translate failed: \(error)"); return none }
         return Bilingual.parseList(out, count: texts.count)
-    }
-
-    /// 你最后那句还没翻：翻好存上（开口前调）
-    @discardableResult
-    static func translateLastUser(_ host: LocalHost, conv: String, comp: [String: Any], settings s: [String: Any], zh: Bool) async -> [String]? {
-        var list = host.store.messages(conv)
-        guard let i = list.lastIndex(where: { ($0["role"] as? String) == "user" }), i == list.count - 1,
-              list[i]["translations"] == nil else { return nil }
-        let text = list[i]["text"] as? String ?? ""
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        let parts = list[i]["parts"] as? [String] ?? [text]
-        let id = list[i]["id"] as? Int
-        let got = await translate(host, comp: comp, parts, from: target(s, zh: zh), to: speaks(s), zh: zh)
-        guard got.allSatisfy({ $0 != nil }) else { return nil }
-        list = host.store.messages(conv)                           // 翻的时候可能又进来了别的：按 id 找回去
-        guard let id, let j = list.firstIndex(where: { ($0["id"] as? Int) == id }) else { return nil }
-        let ts = got.compactMap { $0 }
-        list[j]["translations"] = ts
-        host.store.saveMessages(conv, list)
-        return ts
     }
 }
 #endif

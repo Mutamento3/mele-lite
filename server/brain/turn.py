@@ -405,14 +405,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     else:
         said = await archive.add_message(pool, conv, "user", text, parts=pieces, now=now)
         sent = await files.claim(pool, conv, attachments, said.id) if attachments else []
-        spoken = text
-        if bilingual.active(settings, group) and text.strip():     # 双语气泡（10-15）：你那句先翻成 TA 那种语言
-            ts = await bilingual.translate(deps, scope, pieces or [text], bilingual.target(settings), bilingual.speaks(settings), lang)
-            if all(ts):
-                await _safe(archive.set_translations(pool, said.id, ts), None)
-                await emit({"type": "user_translation", "translations": ts})     # App 把它补到你刚发的那条上
-                spoken = "\n".join(ts)
-        text_for_model = "\n".join([spoken, *(files.note(f, lang) for f in sent)]).strip()
+        # 双语气泡不翻你那句（10-15 内测：用户不要），原话照发，TA 照样用它那种语言回
+        text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
     edit_ref = None if scope.incognito or said is None else EditRef(conv, said.id)   # 倒回时按这一轮撤回它写过的东西
     if group is not None and group.user_msg is not None:
         edit_ref = EditRef(conv, group.user_msg)

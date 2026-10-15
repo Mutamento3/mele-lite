@@ -97,7 +97,7 @@ class Settings:
     talk_rules: str = ""                # 说话规矩（10-05）：用户写了就换掉说明书里出厂的两条（一两句就够 / 直接说）；空 = 出厂
     offline_life: bool = False          # 线下生活（10-05）：关着 = 说明书里没有「你有自己的一天」；Lite 本机还管地图 / 它的一天
     other_rooms_count: int = 30         # 一段脑子（10-11 群聊）：别的房间（群 / 私聊）最近几条按时间穿插进来；0 = 不合
-    bilingual: bool = False             # 双语气泡（10-15）：原文在上、译文在下；你的泡也双语（brain/bilingual.py）
+    bilingual: bool = False             # 双语气泡（10-15）：TA 的泡原文在上、译文在下（brain/bilingual.py）
     bilingual_lang: str = "English"     # TA 说什么话
     bilingual_to: str = ""              # 译成什么；空 = App 语言
     bilingual_by: str = "key"           # 译文谁写：key = 钥匙串「翻译」那把（便宜）；self = TA 每泡自己写〔译〕

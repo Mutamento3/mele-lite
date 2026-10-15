@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from llm.catalog import lookup
 from llm.errors import LLMError
 from llm.router import call
-from llm.types import Block, ChatRequest, Msg, Usage
+from llm.types import Block, ChatRequest, Msg, Usage, estimate_tokens
 
 from .archive import USER_SIDE, StoredMsg
 
@@ -94,6 +94,17 @@ class RollPlan:
 
 def needs_roll(last_prompt_tokens: int, high_water: int) -> bool:
     return last_prompt_tokens >= high_water
+
+
+# 一次至少卷掉记性长度的这么多（10-15 内测：搬家过来「每轮 5 万 token、一直在卷」）。人设、说明书、记忆这些固定的部分
+# 自己就超过记性长度时，卷账本只能卷聊天记录、降不下来：不设下限就每轮都卷最老的两句，每轮多一次挑记忆 + 写账。
+ROLL_MIN_SHARE = 0.25
+
+
+def worth_rolling(msgs: list[StoredMsg], high_water: int) -> bool:
+    """到线了还得有一批像样的可卷：留下尾巴之后，要卷的那些 ≥ 记性长度的四分之一（按字估 token）。"""
+    rolled = plan_roll(msgs).rolled
+    return bool(rolled) and sum(estimate_tokens(m.text) for m in rolled) >= ROLL_MIN_SHARE * high_water
 
 
 def plan_roll(msgs: list[StoredMsg], keep_count: int | None = None, keep_chars: int | None = None) -> RollPlan:
