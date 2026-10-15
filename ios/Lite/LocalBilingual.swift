@@ -5,7 +5,8 @@ import MeleLiteCore
 /// 双语气泡（10-15）：TA 设定里开。译文谁写：key = 钥匙串「翻译」那把翻（便宜，默认）；self = TA 每泡自己写〔译〕。
 /// 你那句不翻（10-15 内测：用户不要）；TA 的几泡说完再翻（或切下 TA 写的〔译〕），存在那条消息的 translations 上。
 enum LocalBilingual {
-    static func active(_ s: [String: Any], group: Bool) -> Bool { (s["bilingual"] as? Bool ?? false) && !group }
+    /// 群里也开（10-15 Aporia）：每个 TA 按自己设定里的开关来
+    static func active(_ s: [String: Any], group: Bool) -> Bool { s["bilingual"] as? Bool ?? false }
 
     static func speaks(_ s: [String: Any]) -> String {
         let v = (s["bilingual_lang"] as? String ?? "").trimmingCharacters(in: .whitespaces)

@@ -20,8 +20,9 @@ MARK = "〔译〕"
 _MARK_LINE = re.compile(r"\n?\s*[〔\[【(（]\s*译\s*[〕\]】)）]\s*[:：]?\s*")
 
 
-def active(settings: Settings, group) -> bool:
-    return bool(settings.bilingual) and group is None
+def active(settings: Settings, group=None) -> bool:
+    """群里也开（10-15 Aporia）：每个 TA 按自己设定里的开关来"""
+    return bool(settings.bilingual)
 
 
 def target(settings: Settings) -> str:

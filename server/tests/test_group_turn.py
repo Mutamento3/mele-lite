@@ -88,3 +88,27 @@ async def test_late_joiner_sees_recent_history_with_note_or_nothing(pool):
 
 async def _noop(_):
     return None
+
+
+async def test_group_bilingual_follows_each_ta(pool):
+    """10-15 Aporia：群里也能双语——每个 TA 按自己设定里的开关来，你说的话不翻。"""
+    acc, ju, man, gid = await setup(pool)
+    await archive.save_settings(pool, ju, {**(await archive.get_settings(pool, ju)), "bilingual": True})
+    u = await archive.add_message(pool, gid, "user", "今晚吃什么", now=NOW - timedelta(minutes=1))
+    events = []
+
+    async def emit(e):
+        events.append(e)
+    m = FakeModel(["Hotpot again?", '["又吃火锅？"]'])
+    await run_turn(make_deps(pool, m), Scope(acc, ju, gid), "今晚吃什么", emit,
+                   group=GroupCtx(name="三人行", others=("小满",), user_msg=u.id))
+    assert "〔双语〕" in m.requests[0].messages[-1].text
+    assert [(e["text"], e.get("translation")) for e in events if e["type"] == "bubble"] == [("Hotpot again?", "又吃火锅？")]
+    said = (await archive.unrolled(pool, gid))[-1]
+    assert (said.speaker, said.translations) == (ju, ["又吃火锅？"])
+    assert (await archive.unrolled(pool, gid))[0].translations is None                 # 你那句不翻
+    m2 = FakeModel(["火锅！"])                                                          # 小满没开：不加规矩、不翻
+    await run_turn(make_deps(pool, m2), Scope(acc, man, gid), "今晚吃什么", lambda e: _noop(e),
+                   group=GroupCtx(name="三人行", others=("阿橘",), user_msg=u.id))
+    assert len(m2.requests) == 1 and "〔双语〕" not in m2.requests[0].messages[-1].text
+    assert (await archive.unrolled(pool, gid))[-1].translations is None
