@@ -220,7 +220,7 @@ final class LocalHost: @unchecked Sendable {
         "humor": "mid", "recall_level": "medium", "careful_read": true, "recall_probe": true, "memory_length": NSNull(),
         "reply_wait": 10, "max_bubbles": 6, "long_mode": false, "thinking": true, "thinking_mode": NSNull(),
         "ledger_same_as_chat": false, "sentinels": ["thinking_style": true, "tool_reminder": true, "remembered": true],
-        "tool_reminder_every": 5, "thinking_style_text": "", "thinking_style_every": 3, "inner_voice": false, "inner_voice_style": "", "injections": [Any](), "patrol_level": "mid",
+        "tool_reminder_every": 5, "thinking_style_text": "", "thinking_style_every": 3, "inner_voice": false, "inner_voice_style": "", "bilingual": false, "bilingual_lang": "English", "bilingual_to": "", "bilingual_by": "key", "injections": [Any](), "patrol_level": "mid",
         "heartbeat_on": true, "morning_on": true, "sleep_from": "00:00", "sleep_to": "08:00", "patrol_overrides": [String: Any](),
         "relationship": "", "cache_keepalive": false, "diary_on": true, "offline_life": false, "talk_rules": "", "diary_chars": 600, "voice_mode": "sometimes",
         "full_handbook": true,      // Lite 说明书开关（10-08 Aporia：默认开）
@@ -472,6 +472,7 @@ final class LocalHost: @unchecked Sendable {
                 "thinking_ms": m["thinking_ms"] ?? NSNull(), "inner_voice": m["inner_voice"] ?? "", "at": m["at"] ?? "", "bubbles": shown, "voices": voices, "cards": m["cards"] ?? [Any](),
                 "reaction": m["reaction"] ?? NSNull(), "reactions": Self.perBubble(m, count: shown.count),
                 "attachments": atts, "divider": m["divider"] ?? NSNull(),
+                "translations": (m["translations"] as? [Any]).flatMap { $0.count == shown.count ? $0 : nil } ?? NSNull(),
                 "speaker": m["speaker"] ?? NSNull(), "speaker_name": m["speaker_name"] ?? NSNull()]
     }
 

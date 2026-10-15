@@ -24,7 +24,11 @@ struct GaugeLine: View {
         guard let g = try? await api.raw("GET", "conversations/\(conversation.uuidString.lowercased())/gauge") as? [String: Any],
               g["known"] as? Bool == true, let tokens = g["tokens"] as? Int else { return }
         let left = g["remaining"] as? Int ?? 0
-        text = g["full"] as? Bool == true
+        let fixed = g["fixed"] as? Int ?? 0, high = g["high"] as? Int ?? 0
+        // 人设、记忆这些卷不掉的自己就超过记性长度（10-15 内测）：卷账本帮不上，说实话
+        text = high > 0 && fixed >= high
+            ? String(localized: "当前 \(Self.k(tokens)) tokens · 设定和记忆就占了约 \(Self.k(fixed))，比记性长度还长")
+            : g["full"] as? Bool == true
             ? String(localized: "当前 \(Self.k(tokens)) tokens · 满了，正在卷进回声")
             : String(localized: "当前 \(Self.k(tokens)) tokens · 还剩约 \(Self.k(left)) 满")
     }

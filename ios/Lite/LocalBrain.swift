@@ -410,6 +410,11 @@ final class LocalBrain: @unchecked Sendable {
         }
         // 回声（10-04）：卷进账本的那些不再原样进上下文，账本放 system 里
         let rolledUpto = LocalEcho.rolledUpto(host.store, conv)
+        if nudge == nil, LocalBilingual.active(settings, group: group != nil) {     // 双语气泡（10-15）：你那句先翻成 TA 那种语言
+            if let ts = await LocalBilingual.translateLastUser(host, conv: conv, comp: comp, settings: settings, zh: zh) {
+                say(["type": "user_translation", "translations": ts])         // App 把它补到你刚发的那条上
+            }
+        }
         var stored = host.store.messages(conv).filter { ($0["id"] as? Int ?? 0) > rolledUpto }
         let uname = Self.userLabel(settings, zh: zh)
         // 群：后来拉进来的——开关开着看进群前最近 30 条（还没开过口就垫一句「刚被拉进群」），关着只看进群以后的
@@ -444,7 +449,8 @@ final class LocalBrain: @unchecked Sendable {
                 .flatMap { $0["id"] as? Int }
             : nil
         var history: [Message] = stored.map {
-            var text = $0["text"] as? String ?? ""
+            var text = ($0["role"] as? String) == "user" ? Bilingual.userSide($0["text"] as? String ?? "", $0["translations"] as? [Any])
+                                                          : $0["text"] as? String ?? ""
             if let id = lastMonoID, ($0["id"] as? Int) == id, let mono = $0["thinking"] as? String {
                 text = Monologue.wrap(mono.trimmingCharacters(in: .whitespacesAndNewlines), zh: zh) + "\n\n" + text
             }
@@ -626,7 +632,8 @@ final class LocalBrain: @unchecked Sendable {
                                            character: custom ? contact.name : "", provider: provider, memory: box.memory,
                                            messages: host.store.messages(conv))
         for line in sentinelLines { req.context += "\n\n" + line }
-        if innerOn { req.context += "\n\n" + InnerVoice.hook(zh: zh, pronoun: pronoun) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
+        if innerOn { req.context += "\n\n" + InnerVoice.hook(zh: zh, pronoun: pronoun) }
+        if LocalBilingual.active(settings, group: group != nil) { req.context += "\n\n" + LocalBilingual.rule(settings, zh: zh) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
         // 独白的提醒压在最最后（10-12：之前排在饮食 / 人物卡 / 人设锚前面，一长就被盖住，一会写一会不写）
         if monologue { req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun) }
         var text = "", thinking = ""
@@ -777,8 +784,20 @@ final class LocalBrain: @unchecked Sendable {
             .suffix(6).flatMap { Bubbles.split($0["text"] as? String ?? "", cap: nil, offline: long) }
         let split = Bubbles.split(parsed.text, cap: settings["max_bubbles"] as? Int ?? 6, offline: long)
         // 同一条里自己跟自己重复的也丢（10-14 内测：调工具前后各说一遍）
-        let bubbles = Repeats.dropRepeated(Repeats.dropEchoes(split), recent: recentSaid)
+        var bubbles = Repeats.dropRepeated(Repeats.dropEchoes(split), recent: recentSaid)
         var finalText = bubbles.count == split.count ? parsed.text : bubbles.joined(separator: "\n\n")
+        var trans: [String?] = []
+        if LocalBilingual.active(settings, group: group != nil), !bubbles.isEmpty {      // 双语气泡（10-15）：每泡的译文
+            if LocalBilingual.selfWrites(settings) {
+                (bubbles, trans) = Bilingual.splitSelf(bubbles)
+                finalText = bubbles.joined(separator: "\n\n")
+            } else {
+                let plain = bubbles.map { LocalVoice.isVoice($0) ? LocalVoice.asText($0) : $0 }
+                trans = await LocalBilingual.translate(host, comp: comp, plain, from: LocalBilingual.speaks(settings),
+                                                       to: LocalBilingual.target(settings, zh: zh), zh: zh)
+            }
+        }
+        func tr(_ i: Int) -> [String: Any] { trans.indices.contains(i) && trans[i] != nil ? ["translation": trans[i]!] : [:] }
         var clips: [String: Any] = [:]
         for (i, b) in bubbles.enumerated() {
             if i > 0 {
@@ -786,7 +805,7 @@ final class LocalBrain: @unchecked Sendable {
                 try? await Task.sleep(for: .seconds(Bubbles.typingDelay(b)))
             }
             guard LocalVoice.isVoice(b) else {
-                say(["type": "bubble", "text": b])
+                say(["type": "bubble", "text": b].merging(tr(i)) { a, _ in a })
                 await notifyIfAway(conv, companion: cid, name: group.map { "\(contact.name) · \($0.name)" } ?? contact.name, text: b, group: group != nil)      // 切走了：一个气泡一条通知（像微信）
                 continue
             }
@@ -799,10 +818,10 @@ final class LocalBrain: @unchecked Sendable {
             }
             if let clip {
                 clips[LocalVoice.sha(LocalVoice.body(b))] = clip
-                say(["type": "bubble", "text": LocalVoice.asText(b), "voice": clip])
+                say(["type": "bubble", "text": LocalVoice.asText(b), "voice": clip].merging(tr(i)) { a, _ in a })
             } else {
                 if let r = finalText.range(of: b) { finalText.replaceSubrange(r, with: LocalVoice.asText(b)) }
-                say(["type": "bubble", "text": LocalVoice.asText(b)])
+                say(["type": "bubble", "text": LocalVoice.asText(b)].merging(tr(i)) { a, _ in a })
             }
             await notifyIfAway(conv, companion: cid, name: group.map { "\(contact.name) · \($0.name)" } ?? contact.name, text: LocalVoice.asText(b), group: group != nil)
         }
@@ -814,7 +833,8 @@ final class LocalBrain: @unchecked Sendable {
         }
         if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !cards.isEmpty || !drawn.isEmpty {
             let saved = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
-                                             attachments: drawn, innerVoice: innerVoiceText, speaker: group == nil ? nil : cidSelf)
+                                             attachments: drawn, innerVoice: innerVoiceText, speaker: group == nil ? nil : cidSelf,
+                                             translations: trans)
             if !clips.isEmpty, let mid = saved["id"] as? Int, let (c, idx) = host.store.locate(message: mid) {
                 var list = host.store.messages(c)
                 list[idx]["voice_clips"] = clips

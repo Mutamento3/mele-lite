@@ -87,6 +87,13 @@ enum LocalEcho {
         let settings = comp["settings"] as? [String: Any] ?? [:]
         let tokens = ((c["gauge"] as? [String: Any])?["tokens"] as? Int) ?? 0
         guard tokens >= highWater(settings) else { return }
+        // 还得攒够一批（10-15 内测：人设、记忆这些固定的部分自己就超线时，原来每轮都卷最老的两句、每轮多一次写账）
+        let upto = rolledUpto(host.store, conv)
+        let pending = host.store.messages(conv).compactMap { m -> Msg? in
+            guard let id = m["id"] as? Int, id > upto else { return nil }
+            return Msg(id: id, role: (m["role"] as? String) == "assistant" ? "assistant" : "user", text: m["text"] as? String ?? "", at: .distantPast)
+        }
+        guard RollGate.worthRolling(plan(pending).rolled.map(\.text), highWater: highWater(settings)) else { return }
         guard busyLock.withLock({ busy.insert(conv).inserted }) else { return }
         Task {
             defer { _ = busyLock.withLock { busy.remove(conv) } }

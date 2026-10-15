@@ -1088,6 +1088,9 @@ struct ChatView: View {
                                      path: "attachments/\($0.id.uuidString.lowercased())") }) {
                             VoiceNoteContent(voice: v, transcript: item.text, ink: skin.bubbleInk(mine: mine),
                                              accent: theme.accent, fontSize: skin.size(Typo.Size.headline))
+                            if !mine, let t = item.translation, !t.isEmpty {
+                                Text(t).font(Typo.sans(skin.size(Typo.Size.callout))).foregroundStyle(skin.bubbleInk(mine: mine).opacity(0.72))
+                            }
                         } else {
                         if let parsed = item.quoteParsed {
                             HStack(spacing: 6) {
@@ -1106,10 +1109,17 @@ struct ChatView: View {
                             }
                             .fixedSize(horizontal: false, vertical: true)
                         }
+                        // 双语气泡（10-15）：你的泡上面是翻成 TA 那种语言的、下面是你的原话；TA 的泡原文在上、译文在下
+                        if mine, let t = item.translation, !t.isEmpty {
+                            Text(t).font(Typo.sans(skin.size(Typo.Size.headline))).foregroundStyle(skin.bubbleInk(mine: mine))
+                        }
                         Text(mentionLit(RichText.render(item.quoteParsed?.body ?? item.text, size: skin.size(Typo.Size.headline),
                                                         ink: skin.bubbleInk(mine: mine))))
                             .font(Typo.sans(skin.size(Typo.Size.headline)))
-                            .foregroundStyle(skin.bubbleInk(mine: mine))
+                            .foregroundStyle(skin.bubbleInk(mine: mine).opacity(mine && !(item.translation ?? "").isEmpty ? 0.72 : 1))
+                        if !mine, let t = item.translation, !t.isEmpty {
+                            Text(t).font(Typo.sans(skin.size(Typo.Size.headline))).foregroundStyle(skin.bubbleInk(mine: mine).opacity(0.72))
+                        }
                         }
                     }
                     .padding(.horizontal, 14).padding(.vertical, 10)

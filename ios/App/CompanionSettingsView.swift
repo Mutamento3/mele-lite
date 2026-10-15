@@ -306,6 +306,7 @@ struct CompanionSettingsView: View {
                     who
                     if !store.traitsCatalog.isEmpty { traits }
                     VoiceSettingsSection(store: store, companionID: companion.id)   // Lite 也能用：填自己的 ElevenLabs key（10-04）
+                    bilingual
                     patrol
                     memory
                     key
@@ -622,6 +623,30 @@ struct CompanionSettingsView: View {
 
     /// 本机的日记（10-05）：打开 App 时补写昨天的，所以不用灰着。
     /// 10-12：别的联系人也能写，开关是 diary_also、默认关（主联系人还是 diary_on、默认开）
+    /// 双语气泡（10-15）：原文在上、译文在下，你的泡也双语
+    private var bilingual: some View {
+        Tile {
+            Toggle(isOn: store.s("bilingual", false)) {
+                Text("双语气泡").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+            }
+            if store.settings["bilingual"] as? Bool ?? false {
+                RowPicker(selection: store.s("bilingual_lang", "English")) {
+                    ForEach(["English", "日本語", "한국어", "Français", "Español", "Deutsch", "Русский", "Italiano"], id: \.self) { Text($0).tag($0) }
+                } label: { Text("TA 说").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink) }
+                RowPicker(selection: store.s("bilingual_to", "")) {
+                    Text("跟 App 一样").tag("")
+                    ForEach(["中文", "English", "日本語"], id: \.self) { Text($0).tag($0) }
+                } label: { Text("译成").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink) }
+                RowPicker(selection: store.s("bilingual_by", "key")) {
+                    Text("翻译钥匙（便宜）").tag("key")
+                    Text("TA 自己写").tag("self")
+                } label: { Text("译文谁写").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink) }
+            }
+        } header: { GlassHeader("双语") } footer: {
+            Text("TA 一直用选的语言说话，每个气泡下面一行译文；你照常打字，发出去会先翻成 TA 的语言，你的原话留在下面。「翻译钥匙」用钥匙串里勾了「翻译」的那把（没勾就用聊天那把），每句多一次便宜的调用；「TA 自己写」不多调用，但译文是聊天模型写的，聊天模型贵的话更花钱。群聊里不开。")
+        }
+    }
+
     private var localDiary: some View {
         let main = model.companions.first?.id == companion.id
         let key = main ? "diary_on" : "diary_also"

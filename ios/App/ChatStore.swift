@@ -44,6 +44,8 @@ struct ChatItem: Identifiable, Hashable {
     var voice: VoiceRef?
     /// 思考那一行：这一轮想了多久（毫秒，10-05）
     var thinkingMs: Int?
+    /// 双语气泡（10-15）：你的泡 = 翻成 TA 那种语言的版本（画在上面）；TA 的泡 = 译文（画在下面）
+    var translation: String? = nil
 
     var isPending: Bool { messageID == nil }
 
@@ -78,11 +80,13 @@ struct ChatItem: Identifiable, Hashable {
             out.append(ChatItem(id: m.id * slots - 1, messageID: m.id, mine: false, kind: .card("divider"), text: d, at: m.at))
         }
         var bubbles = m.bubbles ?? [m.text]
+        let trans = m.translations.flatMap { $0.count == bubbles.count ? $0 : nil }
+        func tr(_ i: Int) -> String? { trans.flatMap { $0.indices.contains(i) ? $0[i] : nil } ?? nil }
         if mine {
             if bubbles.count > slots { bubbles = Array(bubbles.prefix(slots - 1)) + [bubbles.dropFirst(slots - 1).joined(separator: "\n")] }
             for (i, text) in bubbles.enumerated() {
                 out.append(ChatItem(id: rowID(message: m.id, slot: i), messageID: m.id, mine: true, kind: .text,
-                                    text: text, at: m.at, attachments: i == 0 ? (m.attachments ?? []) : []))
+                                    text: text, at: m.at, attachments: i == 0 ? (m.attachments ?? []) : [], translation: tr(i)))
             }
             return out
         }
@@ -111,14 +115,15 @@ struct ChatItem: Identifiable, Hashable {
         let peeks = (m.cards ?? []).filter { $0.kind.hasPrefix("peek") }
         let voice = m.innerVoice?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let room = slots - bubbleSlot - peeks.count - (voice.isEmpty ? 0 : 1)
-        if bubbles.count > room { bubbles = Array(bubbles.prefix(room - 1)) + [bubbles.dropFirst(room - 1).joined(separator: "\n\n")] }
+        let merged = bubbles.count > room
+        if merged { bubbles = Array(bubbles.prefix(room - 1)) + [bubbles.dropFirst(room - 1).joined(separator: "\n\n")] }
         for (i, text) in bubbles.enumerated() {
             let v = (m.voices ?? []).indices.contains(i) ? m.voices?[i] : nil
             // 它画的图（10-15 生图）挂在第一泡上面
             let drawn = i == 0 ? (m.attachments ?? []).filter { $0.kind == "image" } : []
             out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + i), messageID: m.id, mine: false, kind: .text,
                                 text: text, at: m.at, reaction: reaction(of: m, bubble: i, count: bubbles.count),
-                                bubble: i, attachments: drawn, voice: v ?? nil))
+                                bubble: i, attachments: drawn, voice: v ?? nil, translation: merged ? nil : tr(i)))
         }
         // 查手机申请卡排在它说的话后面（先说，再递申请）
         for (j, card) in peeks.enumerated() {
@@ -657,7 +662,7 @@ final class ChatStore: ObservableObject {
             rebuild()
         case "bubble":
             live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .text,
-                                 text: ev.text ?? "", at: Date(), voice: ev.voice))
+                                 text: ev.text ?? "", at: Date(), voice: ev.voice, translation: ev.translation))
             typing = false               // 同一次刷新里：三个点直接换成正文
             rebuild()
         case "inner_voice":              // 心声（10-11）：这一轮说完了才到，排最后
@@ -672,6 +677,11 @@ final class ChatStore: ObservableObject {
         case "round_end":                // 群里这一串都说完了（10-11）
             typing = false
             typingName = nil
+        case "user_translation":         // 双语气泡（10-15）：你刚发那条翻好了，补到它身上（还在回显的话，等真身回来自己带着）
+            if let ts = ev.translations, let i = messages.lastIndex(where: { $0.role == "user" }) {
+                messages[i].translations = ts
+                rebuild()
+            }
         case "done":
             typing = false
             liveDone = true

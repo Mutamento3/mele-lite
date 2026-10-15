@@ -174,7 +174,9 @@ async def messages(conv: UUID, after: int = 0, before: int | None = None, day: s
                          "cards": [c for c in m.cards or [] if c.get("kind") != "divider"], "divider": divider(m),
                          "reaction": (marks.get(m.id) or {}).get(-1) or next(iter((marks.get(m.id) or {}).values()), None),
                          "reactions": reactions.per_bubble(marks.get(m.id) or {}, len(shaped[m.id][0])),
-                         "attachments": [f.public() for f in files.get(m.id, [])]} for m in shown],
+                         "attachments": [f.public() for f in files.get(m.id, [])],
+                         "translations": m.translations if m.translations and len(m.translations) == len(shaped[m.id][0]) else None}
+                        for m in shown],
            "busy": a.rooms.busy(conv)}
     if has_more is not None:
         out["has_more"] = has_more

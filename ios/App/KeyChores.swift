@@ -10,7 +10,7 @@ enum ChoreNames {
         [
             "vision": String(localized: "看图"), "draw": String(localized: "画图"), "ledger": String(localized: "写账本"),
             "dedupe": String(localized: "小判断"), "food": String(localized: "饮食估算"), "caption": String(localized: "配文和表情包描述"),
-            "import": String(localized: "读导入的聊天"), "music": String(localized: "每日推歌"), "translate": String(localized: "思考链翻译"),
+            "import": String(localized: "读导入的聊天"), "music": String(localized: "每日推歌"), "translate": String(localized: "翻译"),
             "diary": String(localized: "日记"), "day": String(localized: "TA 的一天"), "moments": String(localized: "朋友圈和相册"),
             "tarot": String(localized: "解牌"), "focus": String(localized: "专注点评"), "voice": String(localized: "声音"),
         ][c] ?? c
@@ -21,6 +21,7 @@ enum ChoreNames {
             "vision": String(localized: "TA 的模型看不见图时，先给这把看、写段描述递给 TA"),
             "ledger": String(localized: "卷账本、压旧天；写不好会换回聊天那把再试"),
             "diary": String(localized: "日记，还有 TA 给你留的信"),
+            "translate": String(localized: "双语气泡、思考链翻译"),
             "dedupe": String(localized: "记忆判重、想起旧事前先听懂、群聊谁接话"),
         ][c]
     }

@@ -181,8 +181,10 @@ struct MessageDTO: Decodable, Identifiable {
     /// 群里是哪个 TA 说的（10-11）；私聊是 nil。名字一起带着，TA 删了也认得
     var speaker: UUID?
     var speakerName: String?
+    /// 双语气泡（10-15）：跟 bubbles 并排的译文（你的泡 = 翻成 TA 那种语言的版本）；没开 / 没翻是 nil
+    var translations: [String?]?
     enum CodingKeys: String, CodingKey {
-        case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider, speaker
+        case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider, speaker, translations
         case thinkingMs = "thinking_ms"
         case innerVoice = "inner_voice"
         case speakerName = "speaker_name"
@@ -228,7 +230,9 @@ struct ChatEvent: Decodable {
     var ms: Int?                 // thinking：这一轮想了多久（10-05）
     var speaker: UUID?           // 群里是谁（10-11）
     var speakerName: String?
-    enum CodingKeys: String, CodingKey { case type, text, kind, message, data, voice, ms, speaker; case isPrivate = "private"; case speakerName = "speaker_name" }
+    var translation: String?     // bubble：双语气泡的译文（10-15）
+    var translations: [String]?  // user_translation：你刚发那条翻好的（10-15）
+    enum CodingKeys: String, CodingKey { case type, text, kind, message, data, voice, ms, speaker, translation, translations; case isPrivate = "private"; case speakerName = "speaker_name" }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
@@ -242,6 +246,8 @@ struct ChatEvent: Decodable {
         ms = try? c.decodeIfPresent(Int.self, forKey: .ms)
         speaker = try? c.decodeIfPresent(UUID.self, forKey: .speaker)
         speakerName = try? c.decodeIfPresent(String.self, forKey: .speakerName)
+        translation = try? c.decodeIfPresent(String.self, forKey: .translation)
+        translations = try? c.decodeIfPresent([String].self, forKey: .translations)
         if kind == "peek" { kind = PeekState.kind(try? c.decodeIfPresent(PeekState.self, forKey: .data)) }
     }
 }

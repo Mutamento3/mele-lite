@@ -33,7 +33,7 @@ from .bubbles import split_reply, typing_delay
 from . import repeats
 from .context import ContextParts, build_request, render_volatile, user_tag
 from . import inner_voice, monologue
-from . import group as G, groups, model_noise, timeline
+from . import bilingual, group as G, groups, model_noise, timeline
 from .inject import TEXTS, TurnFacts, reminder_lines, split_thinking, thinking_style
 from .scope import Scope
 from .persona import Persona, render_base, tone_lines
@@ -216,7 +216,8 @@ def history_msgs(stored: list[archive.StoredMsg], lang: str) -> tuple[list[Msg],
     pending = ""
     for m in stored:
         if m.role in archive.USER_SIDE:
-            out.append(Msg("user", with_tools_note(pending, m.text)))
+            # 双语气泡（10-15）：你那句翻好了就给它看翻好的那版
+            out.append(Msg("user", with_tools_note(pending, bilingual.user_side(m.text, m.translations))))
             pending = ""
         else:
             text = m.text
@@ -404,7 +405,14 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     else:
         said = await archive.add_message(pool, conv, "user", text, parts=pieces, now=now)
         sent = await files.claim(pool, conv, attachments, said.id) if attachments else []
-        text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
+        spoken = text
+        if bilingual.active(settings, group) and text.strip():     # 双语气泡（10-15）：你那句先翻成 TA 那种语言
+            ts = await bilingual.translate(deps, scope, pieces or [text], bilingual.target(settings), bilingual.speaks(settings), lang)
+            if all(ts):
+                await _safe(archive.set_translations(pool, said.id, ts), None)
+                await emit({"type": "user_translation", "translations": ts})     # App 把它补到你刚发的那条上
+                spoken = "\n".join(ts)
+        text_for_model = "\n".join([spoken, *(files.note(f, lang) for f in sent)]).strip()
     edit_ref = None if scope.incognito or said is None else EditRef(conv, said.id)   # 倒回时按这一轮撤回它写过的东西
     if group is not None and group.user_msg is not None:
         edit_ref = EditRef(conv, group.user_msg)
@@ -565,7 +573,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         volatile=render_volatile(now=now, tz=settings.tz, lang=lang, recall=recall, sticky=sticky, lines=before),
         user_text=user_text_now,
         # 人设锚（10-01 Aporia：怕脱离人设）：离最新对话最近的一行，每轮十几个字
-        tail="\n".join([*thinking_lines, *([inner_voice.hook(settings)] if settings.inner_voice else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
+        tail="\n".join([*thinking_lines, *([inner_voice.hook(settings)] if settings.inner_voice else []),
+                         *([bilingual.rule(settings)] if bilingual.active(settings, group) else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
                          + ("" if settings.long_mode or settings.talk_rules.strip() else TEXTS[lang]["short"])]),
         images=images,
     )
@@ -644,13 +653,22 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     kept = repeats.drop_repeated(bubbles_out, recent_said)
     if len(kept) != len(bubbles_out):
         bubbles_out, out.text = kept, "\n\n".join(kept)
+    trans: list = []
+    if bilingual.active(settings, group) and bubbles_out:          # 双语气泡（10-15）：每泡的译文
+        if settings.bilingual_by == "self":
+            bubbles_out, trans = bilingual.split_self(bubbles_out)
+            out.text = "\n\n".join(bubbles_out)
+        else:
+            plain = [voice.strip_tags(voice.body(b)) if voice.is_voice(b) else b for b in bubbles_out]
+            trans = await bilingual.translate(deps, scope, plain, bilingual.speaks(settings), bilingual.target(settings), lang)
+    tr = lambda j: {"translation": trans[j]} if j < len(trans) and trans[j] else {}
     clip_ids: list = []
     for i, bubble in enumerate(bubbles_out):
         if i:
             await emit({"type": "typing"})
             await deps.sleep(typing_delay(bubble))
         if not voice.is_voice(bubble):
-            await emit({"type": "bubble", "text": bubble})
+            await emit({"type": "bubble", "text": bubble, **tr(i)})
             continue
         # 语音条（10-03）：念出来挂上；不发档 / 无痕 / 念不成 → 当文字发，存档里那段也改成文字
         clip = None
@@ -665,10 +683,10 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                 log.exception("voice note crashed; sent as text")
         if clip is None:
             out.text = out.text.replace(bubble, voice.as_text(bubble), 1)
-            await emit({"type": "bubble", "text": voice.as_text(bubble)})
+            await emit({"type": "bubble", "text": voice.as_text(bubble), **tr(i)})
         else:
             clip_ids.append(clip.id)
-            await emit({"type": "bubble", "text": voice.strip_tags(voice.body(bubble)), "voice": clip.public()})
+            await emit({"type": "bubble", "text": voice.strip_tags(voice.body(bubble)), "voice": clip.public(), **tr(i)})
     if not out.text.strip() and out.thinking.strip():
         log.warning("reply came out empty after cutting the monologue; thinking was: %s", out.thinking[-2000:])
     if voice_text and out.text.strip():
@@ -678,7 +696,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                           tools="\n".join(out.tool_notes), cards=out.cards, thinking_ms=thinking_ms,
                                           inner_voice=voice_text, now=deps.now(),
                                           speaker=comp if group is not None else None,
-                                          speaker_name=(persona.name or "TA") if group is not None else "")
+                                          speaker_name=(persona.name or "TA") if group is not None else "",
+                                          translations=trans or None)
         await _safe(voice.attach(pool, acc, clip_ids, saved.id), None)
         if ctx.drawn:                                # 它画的图挂在这句上（10-15）
             await _safe(files.claim(pool, conv, ctx.drawn, saved.id), [])
@@ -704,7 +723,9 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
 
     info = lookup(route.chat_model)
     high_water = settings.memory_length or (info.high_water if info else DEFAULT_HIGH_WATER)
-    if ledger.needs_roll(out.last_prompt, high_water):
+    # 到线了、也攒够一批再卷（10-15：固定部分自己就超线时，别每轮为两句话卷一次）
+    if ledger.needs_roll(out.last_prompt, high_water) and ledger.worth_rolling(await archive.unrolled(pool, conv),
+                                                                                high_water):
         await roll(deps, scope, route, adapter, settings, state, parts, day, emit, state_key=state_key, group=group)
     if trial_mark is not None and out.text.strip():   # 醒来不说话的成本我们认（上面已经提前返回了）
         spent = (await archive.usage_on(pool, acc, day))["cost_usd"] - trial_mark
@@ -744,17 +765,20 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
         return False
     await emit({"type": "ledger", "status": "rolling", "count": len(plan.rolled)})
 
-    pick_hist, pick_note = history_msgs(await files.decorate(pool, msgs, lang), lang)
-    pick_parts = replace(parts, history=pick_hist, volatile="",
-                         user_text=with_tools_note(pick_note, ledger.pick_prompt(plan.rolled, lang)))
-    pick_req = build_request(pick_parts, model=route.chat_model, thinking=False, user_tag=user_tag(scope.account),
-                             lang=lang)
-    ctx = ToolContext(pool=pool, embedder=deps.embedder, user_id=scope.companion, account_id=scope.account,
-                      now=deps.now(), lang=lang)
-    if not scope.incognito:          # 无痕里不记任何东西
+    # 上次写账没成、这段已经挑过记忆的，不再整段重挑（10-15：写不动时每轮多一次满上下文的调用，还会重复记）
+    fresh = [m for m in plan.rolled if m.id > int(state.get("picked_upto", 0))]
+    if fresh and not scope.incognito:          # 无痕里不记任何东西
+        pick_hist, pick_note = history_msgs(await files.decorate(pool, msgs, lang), lang)
+        pick_parts = replace(parts, history=pick_hist, volatile="",
+                             user_text=with_tools_note(pick_note, ledger.pick_prompt(fresh, lang)))
+        pick_req = build_request(pick_parts, model=route.chat_model, thinking=False, user_tag=user_tag(scope.account),
+                                 lang=lang)
+        ctx = ToolContext(pool=pool, embedder=deps.embedder, user_id=scope.companion, account_id=scope.account,
+                          now=deps.now(), lang=lang)
         try:
             picked = await tool_loop(adapter, pick_req, ctx, emit, lang)
             await _account(pool, scope.account, day, route.chat_model, picked.usage)
+            state["picked_upto"] = fresh[-1].id
         except LLMError as e:
             log.warning("pre-roll memory pick failed: %s", e)
 

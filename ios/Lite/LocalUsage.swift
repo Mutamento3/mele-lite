@@ -50,18 +50,14 @@ enum LocalUsage {
         let sent = req.system.count + req.context.count + req.turns.reduce(0) { $0 + $1.text.count }
         let reported = usage?.prompt ?? 0
         let tokens = reported > 0 ? reported : estimateTokens([req.system, req.context] + req.turns.map(\.text))
-        c["gauge"] = ["tokens": tokens, "chars_sent": max(1, sent), "history_chars": all, "at": LocalStore.iso(Date())]
+        // 卷不掉的那部分（人设、说明书、记忆、账本……，10-15）：它自己超过记性长度时，水位那行要说实话，别写「正在卷」
+        let fixed = RollGate.fixedTokens(total: tokens, fixed: [req.system, req.context], history: req.turns.map(\.text))
+        c["gauge"] = ["tokens": tokens, "fixed": fixed, "chars_sent": max(1, sent), "history_chars": all, "at": LocalStore.iso(Date())]
         s.saveConversation(c)
     }
 
     /// 粗估 token：中日韩一个字算一个，别的约 3 个字符一个（跟 Host 的 estimate_tokens 一样，宁可估高）
-    static func estimateTokens(_ parts: [String]) -> Int {
-        parts.reduce(0) { sum, text in
-            let scalars = text.unicodeScalars
-            let wide = scalars.filter { $0.value >= 0x2E80 }.count
-            return sum + wide + (scalars.count - wide + 2) / 3
-        }
-    }
+    static func estimateTokens(_ parts: [String]) -> Int { RollGate.estimateTokens(parts) }
 
     static func handle(_ r: LocalRequest, host: LocalHost) -> LocalResponse? {
         let p = r.parts, s = host.store
@@ -84,7 +80,8 @@ enum LocalUsage {
         }
         let comp = s.conversation(conv).flatMap { $0["companion_id"] as? String }.flatMap { s.companion($0) }
         let high = LocalEcho.highWater(comp?["settings"] as? [String: Any] ?? [:])
-        return ["tokens": tokens, "remaining": max(0, high - tokens), "full": tokens >= high, "known": true]
+        return ["tokens": tokens, "remaining": max(0, high - tokens), "full": tokens >= high, "known": true,
+                "fixed": g["fixed"] as? Int ?? 0, "high": high]
     }
 
     // MARK: 用量页
