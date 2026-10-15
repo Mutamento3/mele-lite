@@ -677,11 +677,10 @@ struct MediaKeysCard: View {
         var imageKey: String?
         var imageModel: String
         var defaultModels: [String: String]
-        var dailyDraws: Int
         var drawnToday: Int
         enum CodingKeys: String, CodingKey {
             case visionKey = "vision_key", imageKey = "image_key", imageModel = "image_model", defaultModels = "default_models"
-            case dailyDraws = "daily_draws", drawnToday = "drawn_today"
+            case drawnToday = "drawn_today"
         }
     }
 
@@ -711,9 +710,9 @@ struct MediaKeysCard: View {
                                     .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
                             }
                         }
-                        Text("今天画了 \(m.drawnToday) / \(m.dailyDraws) 张").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
+                        Text("今天画了 \(m.drawnToday) 张").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
                     }
-                    Hint(text: String(localized: "挑了 TA 才会画图，画好的跟它的话一起发过来。每张都花这把 key 的钱，一天最多 \(m.dailyDraws) 张。模型不填用默认的：Gemini 是 gemini-2.5-flash-image，OpenAI 是 gpt-image-1；中转站填它给的画图模型名。"))
+                    Hint(text: String(localized: "挑了 TA 才会画图，画好的跟它的话一起发过来。每张都花这把 key 的钱。模型不填用默认的：Gemini 是 gemini-2.5-flash-image，OpenAI 是 gpt-image-1；中转站填它给的画图模型名。"))
                     if let error { Text(error).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red) }
                 }
                 .padding(16)

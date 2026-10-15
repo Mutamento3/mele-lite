@@ -7,10 +7,9 @@ import UIKit
 /// Me →「看图和画图」从钥匙串里挑两把：
 /// - 看图：TA 聊天的模型看不见图（DeepSeek、兼容口）时，TA 发的照片先交给这把写一段描述，描述跟着那句话进上下文、存在附件上，以后也记得；
 ///   没挑就用钥匙串里第一把会看图、同意过的。
-/// - 画图：挑了才有 draw 工具。Gemini 走 generateContent（图片模型），OpenAI / 兼容口走 /images/generations。每天最多 dailyDraws 张，免得账单吓人。
+/// - 画图：挑了才有 draw 工具。Gemini 走 generateContent（图片模型），OpenAI / 兼容口走 /images/generations。不限张数（10-15 Aporia：用户自己的 key，想画多少画多少）。
 /// 设置存 media.json：{vision_key, image_key, image_model}
 enum LocalMedia {
-    static let dailyDraws = 10
     static let defaultModels = ["gemini": "gemini-2.5-flash-image", "openai": "gpt-image-1", "openai-compatible": "gpt-image-1"]
 
     static func settings(_ s: LocalStore) -> [String: Any] { s.read("media.json") as? [String: Any] ?? [:] }
@@ -42,7 +41,7 @@ enum LocalMedia {
         let ids = Set(host.keys.compactMap { $0["id"] as? String })
         func live(_ k: String) -> Any { (m[k] as? String).flatMap { ids.contains($0) ? $0 : nil } ?? NSNull() }
         return ["vision_key": live("vision_key"), "image_key": live("image_key"), "image_model": m["image_model"] as? String ?? "",
-                "default_models": defaultModels, "daily_draws": dailyDraws, "drawn_today": drawnToday(host.store)]
+                "default_models": defaultModels, "drawn_today": drawnToday(host.store)]
     }
 
     // MARK: - 看图
@@ -109,16 +108,15 @@ enum LocalMedia {
 
     static let toolSpec = ToolSpec(
         name: "draw",
-        description: "用途：画一张图发给 TA（用 TA 挑的画图模型）。TA 让你画、或者你真想给 TA 看个画面（你那边的样子、你想象的场景）时用；prompt 写清楚画什么、什么风格、什么构图。画好的图会跟你这句话一起发过去，不用再描述一遍。很花钱，一天最多几张，不是每轮都画。",
+        description: "用途：画一张图发给 TA（用 TA 挑的画图模型）。TA 让你画、或者你真想给 TA 看个画面（你那边的样子、你想象的场景）时用；prompt 写清楚画什么、什么风格、什么构图。画好的图会跟你这句话一起发过去，不用再描述一遍。每张都花 TA 的钱，不是每轮都画。",
         parametersJSON: #"{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string","description":"画什么：主体、动作、场景、风格、光线、构图"}}}"#)
 
-    enum DrawError: Error { case noKey, quota, failed(String) }
+    enum DrawError: Error { case noKey, failed(String) }
 
     /// 画一张，存成附件，返回附件号
     static func draw(_ host: LocalHost, prompt: String, conversation conv: String) async throws -> String {
         guard let r = imageRoute(host) else { throw DrawError.noKey }
         let s = host.store
-        guard drawnToday(s) < dailyDraws else { throw DrawError.quota }
         let data = r.provider == "gemini" ? try await gemini(prompt, key: r.key, model: r.model)
                                           : try await openAI(prompt, key: r.key, model: r.model, base: r.base)
         guard let img = UIImage(data: data), let jpg = LocalBrain.jpeg(img, maxSide: 1600) else { throw DrawError.failed("not an image") }
@@ -188,8 +186,6 @@ enum LocalMedia {
             let id = try await draw(host, prompt: prompt, conversation: conv)
             let card: [String: Any] = ["kind": "tool", "text": "\(zh ? "画了一张" : "Drew")：\(String(prompt.prefix(40)))"]
             return (.init(result: zh ? "画好了，会跟你这句话一起发给 TA。" : "Done — it'll be sent along with your message.", card: card), id)
-        } catch DrawError.quota {
-            return (.init(result: zh ? "今天画得够多了（每天最多 \(dailyDraws) 张），明天再画吧。" : "That's enough drawing for today (max \(dailyDraws)/day).", card: nil), nil)
         } catch DrawError.failed(let why) {
             return (.init(result: "没成：\(why)", card: nil), nil)
         } catch {

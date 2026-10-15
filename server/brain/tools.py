@@ -932,7 +932,7 @@ _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]
         "type": "object", "required": ["at", "note"], "properties": {
             "at": _AT, "note": {"type": "string", "description": "到时候想干嘛，写给自己看"}}}),
         _schedule_self),
-    "draw": (ToolSpec("draw", "用途：画一张图发给 TA（用 TA 挑的画图模型）。TA 让你画、或者你真想给 TA 看个画面（你那边的样子、你想象的场景）时用；prompt 写清楚画什么、什么风格、什么构图。画好的图会跟你这句话一起发过去，不用再描述一遍。很花钱，一天最多几张，不是每轮都画。", {
+    "draw": (ToolSpec("draw", "用途：画一张图发给 TA（用 TA 挑的画图模型）。TA 让你画、或者你真想给 TA 看个画面（你那边的样子、你想象的场景）时用；prompt 写清楚画什么、什么风格、什么构图。画好的图会跟你这句话一起发过去，不用再描述一遍。每张都花 TA 的钱，不是每轮都画。", {
         "type": "object", "required": ["prompt"], "properties": {
             "prompt": {"type": "string", "description": "画什么：主体、动作、场景、风格、光线、构图"}}}),
         _draw),

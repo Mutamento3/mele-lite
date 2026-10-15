@@ -140,8 +140,10 @@ enum LocalRooms2 {
                 }
                 s.saveCollection("stickers", all)
             }
-            guard let comp = s.companions.first(where: { c in host.route(for: c).map { !LiteConsent.book.needsAsk($0.0) } ?? false }),
-                  let (provider, key) = host.quietRoute(for: comp), provider.seesImages else { return }
+            // 看图钥匙（10-15，Me「看图和画图」挑的那把）优先；没挑就是钥匙串里第一把会看图、同意过的，再没有才看联系人的
+            let comp = s.companions.first(where: { c in host.route(for: c).map { !LiteConsent.book.needsAsk($0.0) } ?? false }) ?? s.companions.first
+            guard let comp, let (provider, key) = LocalMedia.visionRoute(host)
+                    ?? host.quietRoute(for: comp).flatMap({ $0.0.seesImages && !LiteConsent.book.needsAsk($0.0) ? $0 : nil }) else { return }
             var failures = 0
             let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
             let ask = zh ? "这是一张聊天用的表情包。用一句话（20 字以内）说它是什么、表达什么情绪，只写这一句。"

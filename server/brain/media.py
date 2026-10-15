@@ -3,7 +3,7 @@
 Me →「看图和画图」从钥匙串里挑两把，存在 accounts.media（{vision_key, image_key, image_model}）：
 - 看图：TA 聊天的模型看不见图时，照片先交给这把写描述（brain/vision._describer 先看它，再看钥匙串里第一把会看图的，再用我们的）。
 - 画图：挑了 TA 才有 draw 工具。Gemini 走 generateContent（图片模型），OpenAI / 兼容口走 /images/generations。
-  画好的存成附件，跟它这一轮的话挂在一起；每天最多 DAILY_DRAWS 张，免得账单吓人。"""
+  画好的存成附件，跟它这一轮的话挂在一起；不限张数（用户自己的 key，想画多少画多少）。"""
 from __future__ import annotations
 
 import base64
@@ -20,7 +20,6 @@ from llm.router import Route
 
 log = logging.getLogger(__name__)
 
-DAILY_DRAWS = 10
 DEFAULT_MODELS = {"gemini": "gemini-2.5-flash-image", "openai": "gpt-image-1", "openai-compatible": "gpt-image-1"}
 SEEING = ("anthropic", "openai", "gemini", "openai-compatible")
 GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -54,7 +53,7 @@ async def public(pool, account: UUID, now: datetime) -> dict:
     for k in ("vision_key", "image_key"):
         out[k] = m.get(k) if m.get(k) and await _key(pool, account, m[k]) else None
     return {**out, "image_model": m.get("image_model") or "", "default_models": DEFAULT_MODELS,
-            "daily_draws": DAILY_DRAWS, "drawn_today": await drawn_today(pool, account, now)}
+            "drawn_today": await drawn_today(pool, account, now)}
 
 
 async def put(pool, account: UUID, body: dict) -> None:
@@ -153,8 +152,6 @@ async def draw(pool, box, files_dir: Path, *, account: UUID, conversation: UUID,
     route = await image_route(pool, box, account)
     if route is None:
         raise DrawError("还没挑画图钥匙")
-    if await drawn_today(pool, account, now) >= DAILY_DRAWS:
-        raise DrawError(f"今天画得够多了（每天最多 {DAILY_DRAWS} 张），明天再画吧。")
     data = await generate(*route, prompt)
     try:
         att = await attachments.save(pool, files_dir, account=account, conversation=conversation,
