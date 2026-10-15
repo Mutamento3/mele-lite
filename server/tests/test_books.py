@@ -106,3 +106,28 @@ async def test_marks_per_day(pool, tmp_path):
     for _ in range(3):
         await BK.add_mark(pool, acc, b.id, chapter=1, quote="她在海边", note="", author=str(comp), companion=comp, now=now)
     assert await BK.marks_today(pool, acc, comp, now - timedelta(hours=1)) == 3
+
+
+async def test_book_only_for_one_companion(pool, tmp_path):
+    """书只给某个 TA（10-15）：别的 TA 的书架、翻页、〔在读〕都看不到；App 里的书架照样全有"""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    acc, a, b = uuid4(), uuid4(), uuid4()
+    await pool.execute("INSERT INTO accounts (id) VALUES ($1)", acc)
+    for cid in (a, b):
+        await pool.execute("INSERT INTO companions (id, account_id) VALUES ($1, $2)", cid, acc)
+    now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+    book = await BK.add(pool, tmp_path, acc, name="小满的书.txt", data="第一章 开头\n正文".encode(), now=now)
+    assert (await BK.share_with(pool, acc, book.id, a)).companion_id == a
+    today = now.date()
+    assert [x["id"] for x in await BK.list_all(pool, acc, today)] == [book.id]          # App 书架
+    assert [x["id"] for x in await BK.list_all(pool, acc, today, a)] == [book.id]
+    assert await BK.list_all(pool, acc, today, b) == []
+    assert await BK.get(pool, acc, book.id, b) is None
+    await BK.report(pool, acc, book.id, chapter=0, page=0, page_count=1, seconds=30, today=today, now=now)
+    assert (await BK.reading_now(pool, acc, now, a)).id == book.id
+    assert await BK.reading_now(pool, acc, now, b) is None
+    assert await BK.reading_line(pool, acc, now, "zh", b) == ""
+    assert (await BK.share_with(pool, acc, book.id, None)).companion_id is None
+    assert (await BK.get(pool, acc, book.id, b)).id == book.id

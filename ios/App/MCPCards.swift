@@ -45,7 +45,8 @@ enum MemoryLink {
     static func refresh(_ api: APIClient) async -> [MCPServerDTO] {
         guard Lite.on else { return [] }
         let list: [MCPServerDTO] = (try? await api.call("GET", "mcp/servers")) ?? []
-        UserDefaults.standard.set(Lite.local && list.contains { $0.memory }, forKey: key)   // 记忆库软件 / 星图只在本机
+        // 连着 Host 时 Host 自己有记忆（每个 TA 一本，10-15 起能看）；本机要接了记忆库才亮
+        UserDefaults.standard.set(Lite.hosted || (Lite.local && list.contains { $0.memory }), forKey: key)
         return list
     }
 }
@@ -298,9 +299,9 @@ struct MemoryRoomView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if LocalMemoryID.isLocal(picked) {
+                if Lite.hosted || LocalMemoryID.isLocal(picked) {
                     #if LITE
-                    LocalMemoryListBody(startOnGraph: tab == "graph")   // 本地库没有网页：原生页（10-11）
+                    LocalMemoryListBody(startOnGraph: tab == "graph")   // 本地库没有网页：原生页（10-11）；连 Host 看 Host 上 TA 那本（10-15）
                     #endif
                 } else if let web {
                     MemoryWebView(base: web.base, token: web.token, mode: .full(tab: tab)).id(web.base)
@@ -328,6 +329,7 @@ struct MemoryRoomView: View {
             }
         }
         .task {
+            guard !Lite.hosted else { return }       // Host 的记忆不走 MCP 那套，原生页自己读
             servers = await MemoryLink.refresh(model.api).filter(\.memory)
             // 接了远程记忆库的先看远程（跟以前一样）；只有本地的就看本地
             picked = servers.first(where: { !LocalMemoryID.isLocal($0.id) })?.id ?? servers.first?.id
@@ -361,7 +363,7 @@ struct StarmapWidget: View {
                 #if LITE
                 GeometryReader { g in
                     let side = min(g.size.width, g.size.height)
-                    LocalStarGlobeView(paused: !onScreen || phase != .active || open)
+                    LocalStarGlobeView(paused: !onScreen || phase != .active || open, shelf: .current(model))
                         .frame(width: side, height: side)
                         .position(x: g.size.width / 2, y: g.size.height / 2)
                 }
@@ -391,6 +393,7 @@ struct StarmapWidget: View {
         .onTapGesture { if connected { open = true } }
         .task {
             let list = await MemoryLink.refresh(model.api)
+            if Lite.hosted { connected = true; localGlobe = true; return }   // Host 上 TA 那本，原生画（10-15）
             connected = list.contains { $0.memory }
             // 接了远程记忆库的照旧看网页星球；只有本地的用原生画
             if let s = list.first(where: { $0.memory && !LocalMemoryID.isLocal($0.id) }) {

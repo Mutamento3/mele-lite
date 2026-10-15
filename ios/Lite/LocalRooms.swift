@@ -10,6 +10,11 @@ enum LocalRooms {
         case ("GET", "lore", 1): return .json(lore(host.store, companion: r.query["companion_id"]))
         case ("POST", "lore", 1): return addLore(host.store, r.json)
         case ("POST", "lore", 2) where p[1] == "batch": return batchLore(host.store, r.json)
+        case ("GET", "lore", 2) where p[1] == "settings": return .json(loreSettings(host.store))
+        case ("PUT", "lore", 2) where p[1] == "settings":
+            guard let n = (r.json["every"] as? NSNumber)?.intValue else { return .error(400, "every 要是数字") }
+            host.store.write("lore_settings.json", ["every": min(occasionalMax, max(occasionalMin, n))])
+            return .json(loreSettings(host.store))
         case ("PATCH", "lore", 2): return patchLore(host.store, Int(p[1]), r.json)
         case ("DELETE", "lore", 2): return deleteLore(host.store, Int(p[1]))
         // 收藏夹
@@ -131,14 +136,21 @@ enum LocalRooms {
 
     /// 偶尔想起（10-14，照 Host lore.occasional）：隔几轮从开了「偶尔想起」的里抽一条，最近抽过的跳过。
     /// 进度记在窗口上（lore_occ = {at: 第几条消息, recent: [id]}）
-    static let occasionalEveryMsgs = 8          // 一来一回两条消息，≈ 隔 4 轮
+    /// 隔几轮抽一条：用户在世界书里拖滑块（10-15，存 lore_settings.json，缺省 4）；一来一回两条消息算一轮
+    static let occasionalDefault = 4, occasionalMin = 1, occasionalMax = 20
+    static func occasionalEvery(_ s: LocalStore) -> Int {
+        ((s.read("lore_settings.json") as? [String: Any])?["every"] as? Int) ?? occasionalDefault
+    }
+    static func loreSettings(_ s: LocalStore) -> [String: Any] {
+        ["every": occasionalEvery(s), "min": occasionalMin, "max": occasionalMax]
+    }
     static func occasionalLore(_ s: LocalStore, companion: String, conversation conv: String, msgCount: Int, zh: Bool) -> String {
         let pool = lore(s, companion: companion).filter {
             ($0["occasional"] as? Bool ?? false) && ($0["enabled"] as? Bool ?? true) && !($0["constant"] as? Bool ?? false)
         }
         guard !pool.isEmpty, var c = s.conversation(conv) else { return "" }
         let st = c["lore_occ"] as? [String: Any] ?? [:]
-        if let at = st["at"] as? Int, msgCount - at < occasionalEveryMsgs, msgCount >= at { return "" }
+        if let at = st["at"] as? Int, msgCount - at < occasionalEvery(s) * 2, msgCount >= at { return "" }
         let recent = st["recent"] as? [Int] ?? []
         let fresh = pool.filter { !recent.contains($0["id"] as? Int ?? -1) }
         guard let e = (fresh.isEmpty ? pool : fresh).randomElement() else { return "" }

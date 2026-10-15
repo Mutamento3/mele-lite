@@ -46,6 +46,7 @@ enum LocalTools {
               "Purpose: move where you are right now (your own day). When you say you're heading home / going out / changing place, or they say you're elsewhere and you go with it, move — otherwise the [Right now] line keeps you where you were. place must be one of your own places (the ones in [Right now] and on the map; \"home\" works); doing = what you do there (under 8 words).",
               #"{"type":"object","properties":{"place":{"type":"string","description":"你的地方的名字"},"doing":{"type":"string","description":"到那儿做什么"}},"required":["place"]}"#),
             LocalBooks.toolSpec,
+            LocalMedia.toolSpec,
             LocalTarot.toolSpec(zh: zh),
             LocalMusic.toolSpec(zh: zh),
             LocalFocus.toolSpec(zh: zh),

@@ -396,6 +396,13 @@ final class LocalBrain: @unchecked Sendable {
         let monologue = (settings["thinking"] as? Bool ?? true) && mode == "monologue"
         var provider = routed
         if monologue { provider.thinking = false }
+        // 看图（10-15）：TA 的模型看不见图时，这一轮发的照片先交给看图钥匙写描述（存在附件上，以后的历史里也用它）
+        let sees = provider.seesImages
+        if !sees {
+            for id in images where host.store.collection("attachments").first(where: { ($0["id"] as? String) == id })?["kind"] as? String == "image" {
+                _ = await LocalMedia.describe(host, attachment: id, zh: zh)
+            }
+        }
 
         // 积压（10-13 内测：中转不报用量的老版本积了几千条没卷）：先卷了再聊，不然这一轮整段发出去，装不下就报错、永远轮不到卷
         if group == nil, LocalEcho.backlogged(host.store, conversation: conv, settings: settings) {
@@ -421,6 +428,10 @@ final class LocalBrain: @unchecked Sendable {
         }
         let voiceNotes = Dictionary(host.store.collection("attachments").filter { ($0["kind"] as? String) == "voice" }
             .compactMap { a in (a["id"] as? String).map { ($0, a["caption"] as? String ?? "") } }, uniquingKeysWith: { a, _ in a })
+        // 照片（10-15）：看不见图的模型在历史里看描述；看得见的只有它画的图写一句（它自己发过什么）
+        let photoNotes = Dictionary(host.store.collection("attachments").filter {
+            ($0["kind"] as? String) == "image" && !(($0["name"] as? String ?? "").hasPrefix("sticker-")) && (!sees || ($0["drawn"] as? Bool ?? false))
+        }.compactMap { a in (a["id"] as? String).map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
         // 上一轮它做过的事（立里程碑、抽牌、发表情包、记账……）：存下来的正文把标记洗掉了，卡片又不进上下文，
         // 它会忘了自己做过、下一轮再做一遍（10-05 真 key 测出来：同一座里程碑连立三轮）。照服务器 TOOLS_HEAD 垫在下一句前面
         var pendingDeeds = ""
@@ -443,6 +454,11 @@ final class LocalBrain: @unchecked Sendable {
             // TA 发的语音（10-04）：正文是转写，前面垫一行〔语音 12 秒：说得偏慢〕
             let notes = ($0["attachments"] as? [String] ?? []).compactMap { voiceNotes[$0] }.filter { !$0.isEmpty }
             if !notes.isEmpty { text = notes.joined(separator: "\n") + "\n" + text }
+            let photos = ($0["attachments"] as? [String] ?? []).compactMap { photoNotes[$0] }.map { a in
+                (a["drawn"] as? Bool ?? false) ? (zh ? "〔你画了一张图：\(a["caption"] as? String ?? "")〕" : "〔You drew: \(a["caption"] as? String ?? "")〕")
+                    : LocalMedia.photoLine(a["caption"] as? String ?? "", zh: zh)
+            }
+            if !photos.isEmpty { text = photos.joined(separator: "\n") + (text.isEmpty ? "" : "\n" + text) }
             if group != nil, !isAssistant {
                 text = GroupChat.label(role == "assistant" ? ($0["speaker_name"] as? String ?? "TA") : uname) + text
             }
@@ -482,7 +498,7 @@ final class LocalBrain: @unchecked Sendable {
         let lore = LocalRooms.loreEntries(host.store, companion: comp["id"] as? String ?? "")
         let hits = LoreMatcher.hits(entries: lore, recent: history, contactID: contact.id)
         let stickers = LocalRooms.stickersForPrompt(host.store)
-        let image = images.lazy.compactMap { id -> Data? in
+        let image = !sees ? nil : images.lazy.compactMap { id -> Data? in
             guard let d = try? Data(contentsOf: self.host.store.fileURL("att-\(id)")), let img = UIImage(data: d) else { return nil }
             return Self.jpeg(img, maxSide: 1280)
         }.first
@@ -499,7 +515,7 @@ final class LocalBrain: @unchecked Sendable {
         // 〔在读〕TA 正在读哪本、〔塔罗〕TA 刚让它解过的一局（一次性）
         // 小号不给：那是平常的你在读 / 在听 / 刚抽的牌
         let cidNow = comp["id"] as? String ?? ""
-        for line in altInfo != nil || group != nil ? [] : [LocalBooks.readingLine(host.store, zh: zh), LocalTarot.pendingNote(host.store, companion: cidNow, zh: zh),
+        for line in altInfo != nil || group != nil ? [] : [LocalBooks.readingLine(host.store, zh: zh, for: cidNow), LocalTarot.pendingNote(host.store, companion: cidNow, zh: zh),
                      LocalMusic.nowLine(host.store, zh: zh), LocalFocus.pendingNote(host.store, conversation: conv, zh: zh)] where !line.isEmpty {
             req.context += "\n\n" + line
         }
@@ -547,6 +563,7 @@ final class LocalBrain: @unchecked Sendable {
         let box = await host.mcp.toolbox(host, companion: comp, incognito: incognito)
         var hiding: Set<String> = []
         if !LocalMap.lifeOn(host.store, cidNow) { hiding.insert("go_to") }       // 没有自己的一天就没地方可挪
+        if LocalMedia.imageRoute(host) == nil || incognito { hiding.insert("draw") }  // 没挑画图钥匙就没有 draw
         if box.memory != nil, LocalMCP.owner(settings, "memory_people") == "remote" { hiding.insert("person_save") }
         if box.memory != nil, LocalMCP.owner(settings, "memory_dates") == "remote" { hiding.insert("date_add") }
         if let group {
@@ -614,6 +631,7 @@ final class LocalBrain: @unchecked Sendable {
         if monologue { req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun) }
         var text = "", thinking = ""
         var cards: [[String: Any]] = []
+        var drawn: [String] = []                        // 这一轮它画的图（附件号，10-15）：跟它的话一起存
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
         let cid = comp["id"] as? String ?? ""
         var gaugeNoted = false
@@ -669,8 +687,13 @@ final class LocalBrain: @unchecked Sendable {
                 usedTools = true                                // 调过工具的这一轮不补叫（前缀续写跟工具不能一起用）
                 var results: [ToolResult] = []
                 for c in calls {
-                    let out = if let via = box.route[c.name] { await host.mcp.run(c, via: via, zh: zh, judge: judge) }
-                              else { await LocalTools.run(c, host: host, companion: cid, conversation: conv, zh: zh) }
+                    var out: LocalTools.Outcome
+                    if let via = box.route[c.name] { out = await host.mcp.run(c, via: via, zh: zh, judge: judge) }
+                    else if c.name == "draw" {
+                        let (o, aid) = await LocalMedia.runTool(c.arguments, host: host, conversation: conv, zh: zh)
+                        out = o
+                        if let aid { drawn.append(aid) }
+                    } else { out = await LocalTools.run(c, host: host, companion: cid, conversation: conv, zh: zh) }
                     results.append(ToolResult(id: c.id, name: c.name, content: out.result))
                     if c.name == "relationship", out.result.hasPrefix("改好了") { say(["type": "relationship"]) }   // 名字旁的图标换一下（照服务器，不挂卡）
                     if let card = out.card {
@@ -774,9 +797,9 @@ final class LocalBrain: @unchecked Sendable {
         if !innerVoiceText.isEmpty, !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             say(["type": "inner_voice", "text": innerVoiceText])
         }
-        if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !cards.isEmpty {
+        if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !cards.isEmpty || !drawn.isEmpty {
             let saved = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
-                                             innerVoice: innerVoiceText, speaker: group == nil ? nil : cidSelf)
+                                             attachments: drawn, innerVoice: innerVoiceText, speaker: group == nil ? nil : cidSelf)
             if !clips.isEmpty, let mid = saved["id"] as? Int, let (c, idx) = host.store.locate(message: mid) {
                 var list = host.store.messages(c)
                 list[idx]["voice_clips"] = clips

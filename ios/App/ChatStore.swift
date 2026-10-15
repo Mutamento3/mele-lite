@@ -114,9 +114,11 @@ struct ChatItem: Identifiable, Hashable {
         if bubbles.count > room { bubbles = Array(bubbles.prefix(room - 1)) + [bubbles.dropFirst(room - 1).joined(separator: "\n\n")] }
         for (i, text) in bubbles.enumerated() {
             let v = (m.voices ?? []).indices.contains(i) ? m.voices?[i] : nil
+            // 它画的图（10-15 生图）挂在第一泡上面
+            let drawn = i == 0 ? (m.attachments ?? []).filter { $0.kind == "image" } : []
             out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + i), messageID: m.id, mine: false, kind: .text,
                                 text: text, at: m.at, reaction: reaction(of: m, bubble: i, count: bubbles.count),
-                                bubble: i, voice: v ?? nil))
+                                bubble: i, attachments: drawn, voice: v ?? nil))
         }
         // 查手机申请卡排在它说的话后面（先说，再递申请）
         for (j, card) in peeks.enumerated() {

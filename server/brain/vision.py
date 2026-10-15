@@ -38,6 +38,10 @@ async def _describer(deps, scope, chat_route: Route) -> tuple[Route | None, str]
     if sees_images(chat_route.provider):
         return chat_route, "chat"
     box = getattr(deps.keys, "box", None)
+    from . import media
+    picked = await media.vision_route(deps.pool, box, scope.account)     # Me 里挑的看图钥匙（10-15）
+    if picked is not None:
+        return picked, "key"
     if box is not None:
         r = await deps.pool.fetchrow(
             "SELECT provider, chat_model, base_url, secret FROM keyring WHERE account_id = $1 "

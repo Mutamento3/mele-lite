@@ -165,9 +165,15 @@ def note(a: Attachment, lang: str) -> str:
 
 
 async def decorate(pool, msgs: list[StoredMsg], lang: str) -> list[StoredMsg]:
-    """历史里 TA 那句带了附件的，在后面接上〔图片：描述〕〔文件：字〕——它看历史时知道当时发了什么。"""
-    got = await for_messages(pool, [m.id for m in msgs if m.role == "user"])
-    return [replace(m, text="\n".join([m.text, *(note(a, lang) for a in got[m.id])]).strip()) if m.id in got else m
+    """历史里 TA 那句带了附件的，在后面接上〔图片：描述〕〔文件：字〕——它看历史时知道当时发了什么。
+    它自己那句带的图是它画的（10-15）：接上〔你画了一张图：画的什么〕，免得忘了自己发过。"""
+    got = await for_messages(pool, [m.id for m in msgs if m.role in ("user", "assistant")])
+
+    def line(m: StoredMsg, a: Attachment) -> str:
+        if m.role == "assistant":
+            return (f"〔你画了一张图：{a.caption}〕" if lang == "zh" else f"〔You drew: {a.caption}〕") if a.kind == "image" else ""
+        return note(a, lang)
+    return [replace(m, text="\n".join([m.text, *(x for x in (line(m, a) for a in got[m.id]) if x)]).strip()) if m.id in got else m
             for m in msgs]
 
 

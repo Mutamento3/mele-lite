@@ -239,18 +239,30 @@ def always_block(entries: list[Entry], lang: str) -> str:
 
 # ── 偶尔想起（10-14 内测：梗清单想让它自己也会用，又不想每轮都带一百多条） ──
 
-OCCASIONAL_EVERY = 4        # 隔几轮抽一条
+OCCASIONAL_EVERY = 4        # 隔几轮抽一条（缺省；用户在世界书里拖滑块改，存 accounts.lore_every，10-15）
+OCCASIONAL_MIN, OCCASIONAL_MAX = 1, 20
 OCCASIONAL_RECENT = 12      # 最近抽过的这么多条不重复
 _OCC_HEAD = {"zh": "〔脑子里冒出来的〕", "en": "〔Popped into your head〕"}
 _OCC_NOTE = {"zh": "（这是你平时会用的。聊到合适的地方想用就用，换成你自己的说法。）",
              "en": "(Something you'd normally use. If it fits the moment, use it — in your own words.)"}
 
 
-def occasional(entries: list[Entry], state: dict, turn_no: int, lang: str, rng=random) -> str:
-    """隔 OCCASIONAL_EVERY 轮从「偶尔想起」的里抽一条；最近抽过的跳过。state 记 lore_occ_at / lore_occ_recent。"""
+async def get_every(pool, account: UUID) -> int:
+    v = await pool.fetchval("SELECT lore_every FROM accounts WHERE id = $1", account)
+    return int(v) if v else OCCASIONAL_EVERY
+
+
+async def set_every(pool, account: UUID, every) -> int:
+    n = max(OCCASIONAL_MIN, min(OCCASIONAL_MAX, int(every)))
+    await pool.execute("UPDATE accounts SET lore_every = $2 WHERE id = $1", account, n)
+    return n
+
+
+def occasional(entries: list[Entry], state: dict, turn_no: int, lang: str, rng=random, *, every: int = OCCASIONAL_EVERY) -> str:
+    """隔 every 轮从「偶尔想起」的里抽一条；最近抽过的跳过。state 记 lore_occ_at / lore_occ_recent。"""
     pool = [e for e in entries if e.enabled and e.occasional and not e.constant]
     last = state.get("lore_occ_at")
-    if not pool or (last is not None and turn_no - int(last) < OCCASIONAL_EVERY):
+    if not pool or (last is not None and turn_no - int(last) < max(OCCASIONAL_MIN, every)):
         return ""
     recent = [int(i) for i in state.get("lore_occ_recent") or []]
     fresh = [e for e in pool if e.id not in recent] or pool

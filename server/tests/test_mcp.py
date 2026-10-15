@@ -127,3 +127,67 @@ def test_names():
     assert mcp.slug("我的 Memory Box!", 3) == "memory_box" and mcp.slug("记忆库", 2) == "mcp2"
     assert mcp.exposed("notion", "search.pages") == "notion_search_pages"
     assert len(mcp.exposed("a" * 20, "b" * 80)) == 64
+
+
+def fake_legacy_server(inline=False):
+    """旧式 SSE 服务（10-15）：GET /sse 开流先发 endpoint，POST /messages?session=1 只回 202、回话走流；
+    inline=True 学那些图省事的，直接回在 POST 响应里"""
+    import asyncio
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def stream():
+        yield b": hello\n\n"
+        yield b"event: endpoint\ndata: /messages?session=1\n\n"
+        while True:
+            msg = await queue.get()
+            if msg is None:
+                return
+            yield f"event: message\ndata: {json.dumps(msg)}\n\n".encode()
+
+    async def handle(req: httpx.Request):
+        if req.headers.get("authorization") != f"Bearer {TOKEN}":
+            return httpx.Response(401)
+        if req.method == "GET" and req.url.path == "/sse":
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream())
+        if req.method == "POST" and req.url.path == "/mcp-new":
+            return httpx.Response(405)                    # 新接法不认
+        assert req.method == "POST" and req.url.path == "/messages" and req.url.params["session"] == "1"
+        body = json.loads(req.content)
+        m, rid = body.get("method"), body.get("id")
+        result = {"initialize": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}},
+                  "tools/list": {"tools": [{"name": "play", "description": "放歌", "inputSchema": {"type": "object"}}]},
+                  "tools/call": {"content": [{"type": "text", "text": "在放了"}]}}.get(m)
+        if rid is None or result is None:
+            return httpx.Response(202)
+        msg = {"jsonrpc": "2.0", "id": rid, "result": result}
+        if inline:
+            return httpx.Response(200, json=msg)
+        await queue.put(msg)
+        return httpx.Response(202, text="Accepted")
+    return httpx.MockTransport(handle), queue
+
+
+@pytest.mark.parametrize("inline", [False, True])
+async def test_legacy_sse(inline):
+    transport, queue = fake_legacy_server(inline)
+    mcp.TRANSPORT = transport
+    c = mcp.Client("https://music.example.com/sse", TOKEN)
+    assert c.legacy
+    assert [t["name"] for t in await c.list_tools()] == ["play"]
+    assert await c.call("play", {"q": "Always"}) == ("在放了", False)        # 同一条流上再问一次
+    c.link.close()
+    await queue.put(None)
+
+
+async def test_new_style_refused_falls_back_to_sse():
+    transport, queue = fake_legacy_server()
+    mcp.TRANSPORT = transport
+    c = mcp.Client("https://music.example.com/mcp-new", TOKEN)
+    assert not c.legacy
+    # 退回旧式时 GET 的还是填的那个地址；这个假服务只在 /sse 开流，所以换个地址看它确实去 GET 了
+    with pytest.raises(mcp.MCPError):
+        await c.list_tools()
+    assert c.legacy
+    c.link.close()
+    await queue.put(None)
+    assert mcp.is_legacy_url("https://x.example/SSE/") and not mcp.is_legacy_url("https://x.example/mcp")

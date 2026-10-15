@@ -206,6 +206,8 @@ def test_occasional_every_few_turns_without_repeats():
     assert "关着的" not in "".join(names)
     assert L.occasional([entry(1, "普通", ["普通"])], {}, 1, "zh") == ""          # 没开偶尔想起的不抽
     assert L.occasional(es[:1], {}, 1, "en").startswith("〔Popped into your head〕")
+    st = {}                                                                     # 滑块拖到 2（10-15）
+    assert [t for t in range(1, 10) if L.occasional(es, st, t, "zh", rng, every=2)] == [1, 3, 5, 7, 9]
 
 
 async def test_api_source_occasional_and_batch(pool):
@@ -224,3 +226,8 @@ async def test_api_source_occasional_and_batch(pool):
         assert (await c.post("/lore/batch", json={"ids": ["x"]})).status_code == 400
         assert (await c.post("/lore/batch", json={"ids": ids[:2], "delete": True})).json() == {"changed": 2}
         assert [x["id"] for x in (await c.get("/lore")).json()] == ids[2:]
+        assert (await c.get("/lore/settings")).json()["every"] == L.OCCASIONAL_EVERY     # 轮数滑块（10-15）
+        assert (await c.put("/lore/settings", json={"every": 7})).json()["every"] == 7
+        assert (await c.put("/lore/settings", json={"every": 99})).json()["every"] == L.OCCASIONAL_MAX
+        assert (await c.put("/lore/settings", json={"every": "x"})).status_code == 400
+        assert (await c.get("/lore/settings")).json()["every"] == L.OCCASIONAL_MAX

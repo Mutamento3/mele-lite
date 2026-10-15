@@ -44,6 +44,7 @@ class Book:
     furthest: int
     read_at: datetime | None
     created_at: datetime
+    companion_id: UUID | None = None      # 只给这一个 TA 看（10-15）；None = 所有 TA 都看得到
 
     def public(self, today_seconds: int = 0, marks: int = 0) -> dict:
         n = len(self.chapters)
@@ -51,10 +52,16 @@ class Book:
         return {"id": self.id, "title": self.title, "chapters": n, "at_chapter": self.at_chapter, "at_page": self.at_page,
                 "page_count": self.page_count, "progress": round(min(1.0, progress), 4), "has_cover": bool(self.cover_path),
                 "read_at": self.read_at.isoformat() if self.read_at else None, "today_minutes": today_seconds // 60,
-                "marks": marks, "created_at": self.created_at.isoformat()}
+                "marks": marks, "created_at": self.created_at.isoformat(),
+                "companion_id": str(self.companion_id) if self.companion_id else None}
 
 
-_COLS = "id, title, path, chapters, cover_path, at_chapter, at_page, page_count, furthest, read_at, created_at"
+_COLS = "id, title, path, chapters, cover_path, at_chapter, at_page, page_count, furthest, read_at, created_at, companion_id"
+
+
+def _seen_by(companion: UUID | None, col: str = "companion_id", n: int = 3) -> str:
+    """TA 那边能看到哪些书：不分给谁的 + 只给它的。companion=None 是 TA 自己（App 里的书架）看全部"""
+    return "" if companion is None else f" AND ({col} IS NULL OR {col} = ${n})"
 
 
 def _row(r) -> Book:
@@ -120,17 +127,19 @@ async def add(pool, files_dir: Path, account: UUID, *, name: str, data: bytes, t
     return await get(pool, account, r["id"])
 
 
-async def get(pool, account: UUID, bid: int) -> Book | None:
-    r = await pool.fetchrow(f"SELECT {_COLS} FROM books WHERE account_id = $1 AND id = $2", account, bid)
+async def get(pool, account: UUID, bid: int, companion: UUID | None = None) -> Book | None:
+    r = await pool.fetchrow(f"SELECT {_COLS} FROM books WHERE account_id = $1 AND id = $2" + _seen_by(companion),
+                            account, bid, *([companion] if companion else []))
     return _row(r) if r else None
 
 
-async def list_all(pool, account: UUID, today: date) -> list[dict]:
+async def list_all(pool, account: UUID, today: date, companion: UUID | None = None) -> list[dict]:
     rows = await pool.fetch(
         f"""SELECT {', '.join('b.' + c.strip() for c in _COLS.split(','))},
                    COALESCE((SELECT seconds FROM book_reading WHERE book_id = b.id AND day = $2), 0) AS today,
                    (SELECT count(*) FROM book_marks WHERE book_id = b.id) AS marks
-            FROM books b WHERE b.account_id = $1 ORDER BY COALESCE(b.read_at, b.created_at) DESC""", account, today)
+            FROM books b WHERE b.account_id = $1{_seen_by(companion, "b.companion_id")}
+            ORDER BY COALESCE(b.read_at, b.created_at) DESC""", account, today, *([companion] if companion else []))
     out = []
     for r in rows:
         d = dict(r)
@@ -153,6 +162,13 @@ async def rename(pool, account: UUID, bid: int, title: str) -> Book | None:
         raise BookError("书名不能空着")
     r = await pool.fetchrow(f"UPDATE books SET title = $3 WHERE account_id = $1 AND id = $2 RETURNING {_COLS}",
                             account, bid, title)
+    return _row(r) if r else None
+
+
+async def share_with(pool, account: UUID, bid: int, companion: UUID | None) -> Book | None:
+    """只给某个 TA（10-15）；None = 所有 TA"""
+    r = await pool.fetchrow(f"UPDATE books SET companion_id = $3 WHERE account_id = $1 AND id = $2 RETURNING {_COLS}",
+                            account, bid, companion)
     return _row(r) if r else None
 
 
@@ -283,14 +299,17 @@ async def catch_reply(pool, account: UUID, conversation: UUID, companion: UUID, 
 
 # ── 它那边：〔在读〕和工具 ──
 
-async def reading_now(pool, account: UUID, now: datetime) -> Book | None:
+async def reading_now(pool, account: UUID, now: datetime, companion: UUID | None = None) -> Book | None:
+    """TA 正在读的那本；带 companion 时那本不给它看就当没在读（不拿别的书顶）"""
     r = await pool.fetchrow(f"SELECT {_COLS} FROM books WHERE account_id = $1 AND read_at > $2 ORDER BY read_at DESC LIMIT 1",
                             account, now - READING_FRESH)
-    return _row(r) if r else None
+    if r is None or (companion and r["companion_id"] not in (None, companion)):
+        return None
+    return _row(r)
 
 
-async def reading_line(pool, account: UUID, now: datetime, lang: str) -> str:
-    b = await reading_now(pool, account, now)
+async def reading_line(pool, account: UUID, now: datetime, lang: str, companion: UUID | None = None) -> str:
+    b = await reading_now(pool, account, now, companion)
     if b is None or not b.chapters:
         return ""
     ch = b.chapters[min(b.at_chapter, len(b.chapters) - 1)][0]

@@ -249,6 +249,7 @@ struct KeychainCard: View {
 
     private func load() async {
         keys = (try? await model.api.call("GET", "keys")) ?? []
+        NotificationCenter.default.post(name: .meleKeysChanged, object: nil)      // 看图和画图那张卡跟着刷
         await model.refreshMe()
     }
 
@@ -653,5 +654,117 @@ struct ContextCard: View {
     private func resetHook() async {
         hook = try? await model.api.call("POST", "me/hook/reset")
         copied = false
+    }
+}
+
+
+extension Notification.Name {
+    static let meleKeysChanged = Notification.Name("MeleKeysChanged")
+}
+
+/// 看图和画图（10-15 Aporia）：从钥匙串里挑一把专门看图（TA 的模型看不见图时替它看），一把画图（挑了 TA 才有 draw）。
+/// 接口 GET / PUT me/media（Lite 本机 LocalMedia；Host routes_account）；旧 Host 没这个接口就不显示
+struct MediaKeysCard: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var theme: AppTheme
+    @State private var keys: [KeyDTO] = []
+    @State private var media: Media?
+    @State private var modelDraft = ""
+    @State private var error: String?
+
+    struct Media: Decodable {
+        var visionKey: String?
+        var imageKey: String?
+        var imageModel: String
+        var defaultModels: [String: String]
+        var dailyDraws: Int
+        var drawnToday: Int
+        enum CodingKeys: String, CodingKey {
+            case visionKey = "vision_key", imageKey = "image_key", imageModel = "image_model", defaultModels = "default_models"
+            case dailyDraws = "daily_draws", drawnToday = "drawn_today"
+        }
+    }
+
+    private static let seeing: Set<String> = ["anthropic", "openai", "gemini", "openai-compatible"]
+    private static let drawing: Set<String> = ["gemini", "openai", "openai-compatible"]
+
+    var body: some View {
+        Group {
+            if let m = media {
+                VStack(alignment: .leading, spacing: 14) {
+                    CardTitle(text: String(localized: "看图和画图"))
+                    row(String(localized: "看图"), picked: m.visionKey, none: String(localized: "自动"),
+                        options: keys.filter { Self.seeing.contains($0.provider) }) { save(["vision_key": $0.map { $0 as Any } ?? NSNull()]) }
+                    Hint(text: String(localized: "TA 用的模型看不见图（DeepSeek 这类）时，你发的照片先给这把看、写一段描述递给 TA，以后翻旧账也记得。Gemini 的 key 便宜，先在上面钥匙串加一把。「自动」= 钥匙串里第一把会看图的。"))
+                    Divider().opacity(0.4)
+                    row(String(localized: "画图"), picked: m.imageKey, none: String(localized: "不画"),
+                        options: keys.filter { Self.drawing.contains($0.provider) }) { save(["image_key": $0.map { $0 as Any } ?? NSNull()]) }
+                    if let kid = m.imageKey, let k = keys.first(where: { $0.id == kid }) {
+                        HStack(spacing: 8) {
+                            Text("模型").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
+                            TextField(m.defaultModels[k.provider] ?? "", text: $modelDraft)
+                                .font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .onSubmit { save(["image_model": modelDraft]) }
+                            if modelDraft != m.imageModel {
+                                Button("存") { save(["image_model": modelDraft]) }
+                                    .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
+                            }
+                        }
+                        Text("今天画了 \(m.drawnToday) / \(m.dailyDraws) 张").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
+                    }
+                    Hint(text: String(localized: "挑了 TA 才会画图，画好的跟它的话一起发过来。每张都花这把 key 的钱，一天最多 \(m.dailyDraws) 张。模型不填用默认的：Gemini 是 gemini-2.5-flash-image，OpenAI 是 gpt-image-1；中转站填它给的画图模型名。"))
+                    if let error { Text(error).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red) }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardSurface()
+            }
+        }
+        .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .meleKeysChanged)) { _ in Task { await load() } }
+    }
+
+    private func row(_ title: String, picked: String?, none: String, options: [KeyDTO], set: @escaping (String?) -> Void) -> some View {
+        HStack {
+            Text(title).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+            Spacer()
+            Menu {
+                Button { set(nil) } label: { if picked == nil { Label(none, systemImage: "checkmark") } else { Text(none) } }
+                ForEach(options) { k in
+                    let name = "\(KeychainCard.providerName(k.provider)) · ••••\(k.last4)"
+                    Button { set(k.id) } label: { if picked == k.id { Label(name, systemImage: "checkmark") } else { Text(name) } }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(options.first { $0.id == picked }.map { "\(KeychainCard.providerName($0.provider)) · ••••\($0.last4)" } ?? none)
+                        .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.accentDeep)
+                    Image(systemName: "chevron.up.chevron.down").font(Typo.icon(11)).foregroundStyle(theme.accentDeep)
+                }
+            }
+        }
+    }
+
+    private func load() async {
+        keys = (try? await model.api.call("GET", "keys")) ?? keys
+        if let m: Media = try? await model.api.call("GET", "me/media") {
+            media = m
+            modelDraft = m.imageModel
+        }
+    }
+
+    private func save(_ body: [String: Any]) {
+        Task {
+            error = nil
+            do {
+                let m: Media = try await model.api.call("PUT", "me/media", json: body)
+                media = m
+                modelDraft = m.imageModel
+            } catch let e as APIError {
+                error = e.message
+            } catch {
+                self.error = String(localized: "没存上，过会儿再试")
+            }
+        }
     }
 }

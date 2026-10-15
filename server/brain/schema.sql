@@ -272,6 +272,8 @@ CREATE TABLE IF NOT EXISTS account_context (
 );
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hook_hash TEXT UNIQUE;   -- 快捷指令口令的哈希（按它认人）
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hook_box BYTEA;          -- 口令加密存一份，Me 里能再看到
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS lore_every INT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS media JSONB NOT NULL DEFAULT '{}'::jsonb;   -- 看图 / 画图挑哪把钥匙（brain/media.py，10-15）            -- 世界书「偶尔想起」隔几轮抽一条（NULL = 缺省 4，10-15）
 
 -- 记着的远事（09-28）：有日子、还远、要一路惦记着的事。TA 看得见能改；了结了存成一条记忆、从清单拿掉
 CREATE TABLE IF NOT EXISTS far_dates (
@@ -687,6 +689,7 @@ CREATE TABLE IF NOT EXISTS books (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS books_account_idx ON books (account_id, created_at);
+ALTER TABLE books ADD COLUMN IF NOT EXISTS companion_id UUID REFERENCES companions(id) ON DELETE SET NULL;  -- 只给这个 TA 看（NULL = 所有 TA，10-15）
 CREATE TABLE IF NOT EXISTS book_marks (               -- 页边：划线（只有 quote）/ 批注（quote + note）/ 往来（parent_id）
   id           BIGSERIAL   PRIMARY KEY,
   account_id   UUID        NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

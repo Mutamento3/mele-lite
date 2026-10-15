@@ -68,6 +68,8 @@ class ToolContext:
     names: tuple[str, ...] = ()      # 称呼（它的名字、TA 的名字）：翻记忆时不进关键词榜（memory/stopwords.py）
     deps: object = None              # 大脑的 Deps：饮食后台估、查营养要用（09-29）；测试里可以空
     mcp: dict = field(default_factory=dict)   # 这一轮外面的工具：给模型的名字 → (服务, 原名)（10-05，brain/mcp.py）
+    conversation: UUID | None = None   # 这一轮在哪个窗口（画的图挂在这儿，10-15）
+    drawn: list = field(default_factory=list)   # 这一轮它画的图（附件号）：跟它的话一起存
 
     @property
     def people_owner(self) -> UUID:
@@ -592,14 +594,16 @@ async def _tarot(ctx: ToolContext, a: dict) -> str:
 async def _book(ctx: ToolContext, a: dict) -> str:
     acc, action = ctx.account_id or ctx.user_id, str(a.get("action") or "")
     if action == "shelf":
-        rows = await BK.list_all(ctx.pool, acc, ctx.now.astimezone(ZoneInfo(ctx.tz)).date())
+        rows = await BK.list_all(ctx.pool, acc, ctx.now.astimezone(ZoneInfo(ctx.tz)).date(), ctx.user_id)
         if not rows:
             return "书架还是空的。"
         return "\n".join(f"#{b['id']}《{b['title']}》读到第 {b['at_chapter'] + 1}/{b['chapters']} 章（{int(b['progress'] * 100)}%）"
                          for b in rows)
-    b = await BK.get(ctx.pool, acc, int(a["id"])) if a.get("id") else await BK.reading_now(ctx.pool, acc, ctx.now)
-    if b is None:                    # 没在读：最近读过的那本
-        last = await ctx.pool.fetchval("SELECT id FROM books WHERE account_id = $1 ORDER BY read_at DESC NULLS LAST LIMIT 1", acc)
+    b = (await BK.get(ctx.pool, acc, int(a["id"]), ctx.user_id) if a.get("id")
+         else await BK.reading_now(ctx.pool, acc, ctx.now, ctx.user_id))
+    if b is None:                    # 没在读：最近读过的那本（只给别的 TA 的书跳过，10-15）
+        last = await ctx.pool.fetchval("SELECT id FROM books WHERE account_id = $1 AND (companion_id IS NULL OR companion_id = $2) "
+                                       "ORDER BY read_at DESC NULLS LAST LIMIT 1", acc, ctx.user_id)
         b = await BK.get(ctx.pool, acc, last) if last else None
     if b is None:
         return "TA 书架上还没有书。"
@@ -623,6 +627,27 @@ async def _book(ctx: ToolContext, a: dict) -> str:
         ctx.cards.append(Card("book", f"在《{b.title}》里划了一句：{_snip(quote, 40)}"))
         return "划好了。TA 翻到那一页会看到你的笔迹。"
     raise ValueError("action 只能是 shelf / page / mark")
+
+
+# ── 画图（10-15，brain/media.py）：Me 里挑了画图钥匙才给 ──
+
+async def _draw(ctx: ToolContext, a: dict) -> str:
+    from . import media
+    prompt = str(a.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("prompt 要写画什么")
+    deps = ctx.deps
+    files_dir = getattr(deps, "files_dir", None)
+    if ctx.conversation is None or files_dir is None:
+        return "这里发不了图。"
+    try:
+        att = await media.draw(ctx.pool, getattr(deps.keys, "box", None), files_dir,
+                               account=ctx.account_id or ctx.user_id, conversation=ctx.conversation, prompt=prompt, now=ctx.now)
+    except media.DrawError as e:
+        return f"没成：{e}"
+    ctx.drawn.append(att.id)
+    ctx.cards.append(Card("tool", f"画了一张：{_snip(prompt, 40)}"))
+    return "画好了，会跟你这句话一起发给 TA。"
 
 
 # ── 钱包记账（10-02）：替 TA 记一笔、看这个月、删一笔。默认它不主动评论 TA 的花销，TA 问才说 ──
@@ -907,6 +932,10 @@ _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]
         "type": "object", "required": ["at", "note"], "properties": {
             "at": _AT, "note": {"type": "string", "description": "到时候想干嘛，写给自己看"}}}),
         _schedule_self),
+    "draw": (ToolSpec("draw", "用途：画一张图发给 TA（用 TA 挑的画图模型）。TA 让你画、或者你真想给 TA 看个画面（你那边的样子、你想象的场景）时用；prompt 写清楚画什么、什么风格、什么构图。画好的图会跟你这句话一起发过去，不用再描述一遍。很花钱，一天最多几张，不是每轮都画。", {
+        "type": "object", "required": ["prompt"], "properties": {
+            "prompt": {"type": "string", "description": "画什么：主体、动作、场景、风格、光线、构图"}}}),
+        _draw),
     "book": (ToolSpec("book", "用途：TA 的书架（Library → 书架）。〔在读〕说 TA 正在读的时候，page=看 TA 这一页写了什么；读到真想说的一句，mark=在页边留一笔（quote 是原文里一字不差的一句，note 是你想说的，可以不写），TA 翻到会看到你的笔迹——不是每次都留，每天最多 3 笔，不剧透 TA 没读到的地方。shelf=看书架上有什么、各读到哪。", {
         "type": "object", "required": ["action"], "properties": {
             "action": {"type": "string", "enum": ["shelf", "page", "mark"]},
@@ -1039,11 +1068,13 @@ INCOGNITO_TOOLS = ("read_manual",)
 
 # 只在某些单独的小轮里给的（朋友圈来刷：点赞、评论），聊天里不给
 SIDE_TOOLS = ("moment_like", "moment_comment", "album_write", "tarot_write")
+# 有条件才给的（画图：Me 里挑了画图钥匙，10-15）：extra 里点名才进清单，能不能用工具自己再查
+OPTIONAL_TOOLS = ("draw",)
 
 
 def tool_specs(incognito: bool = False, extra: tuple[str, ...] = ()) -> list[ToolSpec]:
     return [_TOOLS[name][0] for name in sorted(_TOOLS)
-            if (not incognito or name in INCOGNITO_TOOLS) and (name not in SIDE_TOOLS or name in extra)]
+            if (not incognito or name in INCOGNITO_TOOLS) and (name not in SIDE_TOOLS + OPTIONAL_TOOLS or name in extra)]
 
 
 async def run_tool(ctx: ToolContext, call: ToolCall) -> str:
@@ -1109,6 +1140,9 @@ def tool_note(name: str, args: dict, result: str, lang: str) -> str:
         return t["remember" if name == "memory_remember" else "about"].format(c=c)
     if name == "memory_search":
         return t["search"].format(q=q)
+    if name == "draw":
+        p = _snip(str(a.get("prompt") or ""), 40)
+        return (f"画了一张图「{p}」" if lang == "zh" else f"drew \"{p}\"") + ("" if result.startswith("画好了") else " ✗")
     if name == "sticky_note":
         return t["sticky"]
     if name == "read_manual":

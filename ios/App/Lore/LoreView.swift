@@ -58,6 +58,19 @@ final class LoreStore: ObservableObject {
         return false
     }
 
+    /// 偶尔想起隔几轮抽一条（10-15）：整个账号一个数；旧 Host 没这个接口时是 nil，滑块不显示
+    struct OccasionalSettings: Decodable { let every: Int; let min: Int; let max: Int }
+    @Published var occasional: OccasionalSettings?
+
+    func loadOccasional() async {
+        occasional = try? await api?.call("GET", "lore/settings", as: OccasionalSettings.self)
+    }
+
+    func setEvery(_ n: Int) async {
+        guard let api else { return }
+        if let got = try? await api.call("PUT", "lore/settings", json: ["every": n], as: OccasionalSettings.self) { occasional = got }
+    }
+
     func delete(_ e: LoreEntry) async {
         try? await api?.send("DELETE", "lore/\(e.id)")
         entries.removeAll { $0.id == e.id }
@@ -318,6 +331,7 @@ struct LoreSourceView: View {
     let companionID: String?
     let onEdit: (LoreEntry) -> Void
     @State private var confirmDelete = false
+    @State private var every: Double?
 
     private var items: [LoreEntry] { store.entries.filter { $0.group == source && $0.companionID == companionID } }
 
@@ -329,6 +343,21 @@ struct LoreSourceView: View {
                     set: { on in Task { await store.batch(items.map(\.id), occasional: on) } }))
             } footer: {
                 Text(String(localized: "开着：不用等说到关键词，隔几轮它会随手想起其中一条，自己拿来用。关着：说到关键词才想起。也可以在下面一条条挑。"))
+            }
+            if let o = store.occasional {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(String(localized: "隔 \(Int(every ?? Double(o.every))) 轮想起一条"))
+                            .font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                        Slider(value: Binding(get: { every ?? Double(o.every) }, set: { every = $0.rounded() }),
+                               in: Double(o.min)...Double(o.max), step: 1) { editing in
+                            if !editing, let v = every { Task { await store.setEvery(Int(v)) } }
+                        }
+                        .tint(theme.accentDeep)
+                    }
+                } footer: {
+                    Text(String(localized: "你说一句、TA 回一句算一轮。所有开了「偶尔想起」的组一起轮，所有 TA 都照这个数。"))
+                }
             }
             Section {
                 ForEach(items) { e in
@@ -368,6 +397,7 @@ struct LoreSourceView: View {
         }
         .navigationTitle(source)
         .navigationBarTitleDisplayMode(.inline)
+        .task { await store.loadOccasional() }
         .confirmationDialog(String(localized: "删掉「\(source)」这一组？"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button(String(localized: "删掉 \(items.count) 条"), role: .destructive) {
                 Task { await store.batch(items.map(\.id), delete: true); dismiss() }

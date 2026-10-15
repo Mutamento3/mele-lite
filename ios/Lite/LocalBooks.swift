@@ -25,9 +25,21 @@ enum LocalBooks {
         case ("GET", 1): return .json(list(s))
         case ("POST", 1): return add(s, r)
         case ("PATCH", 2):
+            // {title?, companion_id?}：companion_id = 只给这个 TA 看，null = 所有 TA（10-15）
+            let share = r.json.keys.contains("companion_id")
+            var cid: String?
+            if share, let c = r.json["companion_id"] as? String, !c.isEmpty {
+                guard s.companion(c) != nil else { return .error(404, String(localized: "没有这个联系人")) }
+                cid = c
+            }
             let title = (r.json["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty else { return .error(400, String(localized: "书名不能空着")) }
-            guard let b = update(s, bid, { $0["title"] = String(title.prefix(100)) }) else { return noBook }
+            if !share || r.json["title"] != nil {
+                guard !title.isEmpty else { return .error(400, String(localized: "书名不能空着")) }
+            }
+            guard let b = update(s, bid, { b in
+                if !title.isEmpty { b["title"] = String(title.prefix(100)) }
+                if share { b["companion_id"] = cid ?? NSNull() }
+            }) else { return noBook }
             return .json(publicOut(s, b))
         case ("DELETE", 2):
             guard let b = book(s, bid) else { return noBook }
@@ -112,6 +124,12 @@ enum LocalBooks {
         return s.collection("books").first { ($0["id"] as? Int) == id }
     }
 
+    /// 这本书 TA 那边谁看得到（10-15）：没分给谁 = 所有 TA；分了 = 只有那一个。viewer=nil 是用户自己（全看得到）
+    static func visible(_ b: [String: Any], to viewer: String?) -> Bool {
+        guard let viewer, let only = b["companion_id"] as? String, !only.isEmpty else { return true }
+        return only == viewer
+    }
+
     @discardableResult
     static func update(_ s: LocalStore, _ id: Int?, _ change: (inout [String: Any]) -> Void) -> [String: Any]? {
         var all = s.collection("books")
@@ -159,11 +177,12 @@ enum LocalBooks {
         let marks = s.collection("book-marks").filter { ($0["book_id"] as? Int) == id }.count
         return ["id": id, "title": b["title"] ?? "", "chapters": n, "at_chapter": at, "at_page": page, "page_count": pc,
                 "progress": (progress * 10000).rounded() / 10000, "has_cover": b["cover"] as? Bool ?? false,
-                "read_at": b["read_at"] ?? NSNull(), "today_minutes": secs / 60, "marks": marks, "created_at": b["created_at"] ?? ""]
+                "read_at": b["read_at"] ?? NSNull(), "today_minutes": secs / 60, "marks": marks, "created_at": b["created_at"] ?? "",
+                "companion_id": b["companion_id"] ?? NSNull()]
     }
 
-    static func list(_ s: LocalStore) -> [[String: Any]] {
-        s.collection("books").sorted {
+    static func list(_ s: LocalStore, for viewer: String? = nil) -> [[String: Any]] {
+        s.collection("books").filter { visible($0, to: viewer) }.sorted {
             max(LocalStore.date($0["read_at"]), LocalStore.date($0["created_at"])) > max(LocalStore.date($1["read_at"]), LocalStore.date($1["created_at"]))
         }.map { publicOut(s, $0) }
     }
@@ -298,13 +317,15 @@ enum LocalBooks {
 
     // MARK: - 它那边：〔在读〕和工具
 
-    static func readingNow(_ s: LocalStore) -> [String: Any]? {
+    /// TA 正在读的那本；带 viewer 时那本不给它看就当没在读（不拿别的书顶）
+    static func readingNow(_ s: LocalStore, for viewer: String? = nil) -> [String: Any]? {
         s.collection("books").filter { Date().timeIntervalSince(LocalStore.date($0["read_at"])) < readingFresh }
             .max { LocalStore.date($0["read_at"]) < LocalStore.date($1["read_at"]) }
+            .flatMap { visible($0, to: viewer) ? $0 : nil }
     }
 
-    static func readingLine(_ s: LocalStore, zh: Bool) -> String {
-        guard let b = readingNow(s) else { return "" }
+    static func readingLine(_ s: LocalStore, zh: Bool, for viewer: String? = nil) -> String {
+        guard let b = readingNow(s, for: viewer) else { return "" }
         let cs = chapters(b)
         guard !cs.isEmpty else { return "" }
         let at = min(b["at_chapter"] as? Int ?? 0, cs.count - 1), page = b["at_page"] as? Int ?? 0, pc = b["page_count"] as? Int ?? 0
@@ -334,13 +355,14 @@ enum LocalBooks {
         let s = host.store
         let action = a["action"] as? String ?? ""
         if action == "shelf" {
-            let rows = list(s)
+            let rows = list(s, for: companion)
             guard !rows.isEmpty else { return .init(result: "书架还是空的。", card: nil) }
             let lines = rows.map { "#\($0["id"] ?? 0)《\($0["title"] ?? "")》读到第 \(($0["at_chapter"] as? Int ?? 0) + 1)/\($0["chapters"] ?? 0) 章（\(Int(($0["progress"] as? Double ?? 0) * 100))%）" }
             return .init(result: lines.joined(separator: "\n"), card: nil)
         }
-        let b = (a["id"] as? Int).flatMap { book(s, $0) } ?? readingNow(s)
-            ?? s.collection("books").max { LocalStore.date($0["read_at"]) < LocalStore.date($1["read_at"]) }
+        let b = (a["id"] as? Int).flatMap { book(s, $0) }.flatMap { visible($0, to: companion) ? $0 : nil }
+            ?? readingNow(s, for: companion)
+            ?? s.collection("books").filter { visible($0, to: companion) }.max { LocalStore.date($0["read_at"]) < LocalStore.date($1["read_at"]) }
         guard let b else { return .init(result: "TA 书架上还没有书。", card: nil) }
         let title = b["title"] as? String ?? ""
         let cs = chapters(b)

@@ -107,7 +107,7 @@ enum LocalPeek {
             add(zh ? "收藏" : "Favorites", es.map { "· " + cut($0["text"], 160) })
         }
         if picked.contains("books") {
-            add(zh ? "书架" : "Bookshelf", s.collection("books").map { "·《\($0["title"] as? String ?? "")》" })
+            add(zh ? "书架" : "Bookshelf", s.collection("books").filter { LocalBooks.visible($0, to: viewer) }.map { "·《\($0["title"] as? String ?? "")》" })
         }
         if picked.contains("music") {
             let es = s.collection("music-shelf").sorted { LocalStore.date($0["created_at"]) > LocalStore.date($1["created_at"]) }.prefix(20)

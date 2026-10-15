@@ -17,12 +17,16 @@ struct BookDTO: Decodable, Identifiable, Hashable {
     let hasCover: Bool
     let todayMinutes: Int
     let marks: Int
+    /// 只给这个 TA 看（10-15）；nil = 所有 TA（旧 Host 没这一项）
+    var companionID: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, title, chapters, progress, marks
         case atChapter = "at_chapter", atPage = "at_page", pageCount = "page_count", hasCover = "has_cover"
-        case todayMinutes = "today_minutes"
+        case todayMinutes = "today_minutes", companionID = "companion_id"
     }
+
+    var onlyFor: UUID? { companionID.flatMap(UUID.init(uuidString:)) }
 
     var coverPath: String { "books/\(id)/cover" }
 }
@@ -87,6 +91,19 @@ final class BooksStore: ObservableObject {
 
     func rename(_ b: BookDTO, to title: String, api: APIClient) async {
         _ = try? await api.raw("PATCH", "books/\(b.id)", json: ["title": title])
+        await load(api)
+    }
+
+    /// 只给某个 TA 看；nil = 所有 TA（10-15）
+    func share(_ b: BookDTO, with companion: UUID?, api: APIClient) async {
+        error = nil
+        do {
+            _ = try await api.raw("PATCH", "books/\(b.id)", json: ["companion_id": companion.map { $0.uuidString.lowercased() } as Any? ?? NSNull()])
+        } catch let e as APIError {
+            error = e.message
+        } catch {
+            self.error = "没连上，过会儿再试"
+        }
         await load(api)
     }
 

@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
-from brain import accounts, archive, auth, avatars, context_line
+from brain import accounts, archive, auth, avatars, context_line, media
 
 from .deps import Api, account, api, bearer
 
@@ -119,6 +119,24 @@ async def put_profile(body: dict = Body(...), acc: UUID = Depends(account), a: A
         return await accounts.save_profile(a.deps.pool, acc, body)
     except (ValueError, TypeError) as e:
         raise _bad(e) from e
+
+
+# ── 看图和画图（10-15，brain/media.py）──
+
+@router.get("/me/media")
+async def get_media(acc: UUID = Depends(account), a: Api = Depends(api)):
+    return await media.public(a.deps.pool, acc, a.deps.now())
+
+
+@router.put("/me/media")
+async def put_media(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    try:
+        await media.put(a.deps.pool, acc, body)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise _bad(e) from e
+    return await media.public(a.deps.pool, acc, a.deps.now())
 
 
 # ── 钥匙串 ──

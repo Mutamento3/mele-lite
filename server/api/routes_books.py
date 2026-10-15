@@ -47,8 +47,18 @@ async def add(file: UploadFile = File(...), title: str = Form(""), acc: UUID = D
 
 @router.patch("/books/{bid}")
 async def rename(bid: int, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """{title?, companion_id?}：companion_id = 只给这个 TA 看，null = 所有 TA（10-15）"""
+    b = None
     try:
-        b = await BK.rename(a.deps.pool, acc, bid, str(body.get("title") or ""))
+        if "title" in body or "companion_id" not in body:
+            b = await BK.rename(a.deps.pool, acc, bid, str(body.get("title") or ""))
+        if "companion_id" in body:
+            cid = body.get("companion_id")
+            try:
+                cid = await own_companion(a, acc, UUID(str(cid))) if cid else None
+            except ValueError:
+                raise HTTPException(400, "companion_id 不对") from None
+            b = await BK.share_with(a.deps.pool, acc, bid, cid)
     except BK.BookError as e:
         raise HTTPException(400, str(e)) from e
     if b is None:

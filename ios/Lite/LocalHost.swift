@@ -76,6 +76,7 @@ final class LocalHost: @unchecked Sendable {
             if let res = await LocalMemoryRooms.handle(r, host: self) { return res }
             if let res = await LocalFood.handle(r, host: self) { return res }
             if let res = LocalBooks.handle(r, host: self) { return res }
+            if let res = LocalMedia.handle(r, host: self) { return res }
             if let res = LocalPeek.handle(r, host: self) { return res }
             if let res = LocalFriends.handle(r, host: self) { return res }
             if let res = LocalMap.handle(r, host: self) { return res }
@@ -169,12 +170,16 @@ final class LocalHost: @unchecked Sendable {
 
     /// 这个联系人用哪家、哪把 key（零件包的 ProviderConfig）
     func route(for companion: [String: Any]) -> (ProviderConfig, String)? {
-        guard let kid = companion["key_id"] as? String,
-              let k = keys.first(where: { ($0["id"] as? String) == kid }),
+        guard let kid = companion["key_id"] as? String else { return nil }
+        return route(key: kid, thinking: (companion["settings"] as? [String: Any])?["thinking"] as? Bool ?? true)
+    }
+
+    /// 某一把钥匙（看图 / 画图那张卡挑的，10-15）
+    func route(key kid: String, thinking: Bool = false) -> (ProviderConfig, String)? {
+        guard let k = keys.first(where: { ($0["id"] as? String) == kid }),
               let secret = vault.get(kid) else { return nil }
         let model = k["chat_model"] as? String ?? ""
         let base = k["base_url"] as? String
-        let thinking = (companion["settings"] as? [String: Any])?["thinking"] as? Bool ?? true
         switch k["provider"] as? String {
         case "anthropic": return (ProviderConfig(kind: .anthropic, model: model, thinking: thinking), secret)
         case "gemini": return (ProviderConfig(kind: .gemini, model: model, thinking: thinking), secret)

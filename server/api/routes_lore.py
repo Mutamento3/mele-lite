@@ -54,6 +54,21 @@ async def batch_lore(body: dict = Body(...), acc: UUID = Depends(account), a: Ap
     return {"changed": n}
 
 
+@router.get("/lore/settings")
+async def lore_settings(acc: UUID = Depends(account), a: Api = Depends(api)):
+    """偶尔想起隔几轮抽一条（10-15）：整个账号一个数，所有 TA 都照它"""
+    return {"every": await L.get_every(a.deps.pool, acc), "min": L.OCCASIONAL_MIN, "max": L.OCCASIONAL_MAX}
+
+
+@router.put("/lore/settings")
+async def put_lore_settings(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    try:
+        n = await L.set_every(a.deps.pool, acc, body.get("every"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "every 要是数字") from None
+    return {"every": n, "min": L.OCCASIONAL_MIN, "max": L.OCCASIONAL_MAX}
+
+
 @router.patch("/lore/{entry_id}")
 async def patch_lore(entry_id: int, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """改一部分；带 companion_id 键才改给谁（null = 所有人）。"""

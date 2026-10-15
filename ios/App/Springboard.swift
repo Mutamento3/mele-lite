@@ -65,7 +65,7 @@ enum HomeApp: String, CaseIterable, Codable {
     /// Lite 里要 Mele Host 的：图标灰着带锁
     var needsHost: Bool { self == .memory && Lite.local && !MemoryLink.connected }
     /// 连着 Host 时先收起来的（只在手机里做的，还没搬上服务器；10-04）
-    var localOnly: Bool { Lite.hosted && self == .memory }      // 音乐 10-05 夜放开：第 12 版起 Host 有音乐（iTunes 找歌 + 歌词开关）
+    var localOnly: Bool { false }      // 音乐 10-05 夜放开；记忆库 10-15 放开（Host 上看 TA 那本）。眼下没有只在手机里的
     /// 只有 Mele 有的
     var available: Bool { Lite.on ? (Lite.hosted || self != .wakes) : self != .memory }
 }

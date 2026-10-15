@@ -122,6 +122,15 @@ struct BookshelfView: View {
                 .frame(width: Self.coverW, height: Self.coverH)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 5, x: 2, y: 3)
+                .overlay(alignment: .topLeading) {
+                    if let only = b.onlyFor {      // 只给某个 TA 看的书：封面左上角挂个小名牌
+                        Text(model.companions.first { $0.id == only }?.name ?? "仅一人")
+                            .font(Typo.sans(Typo.Size.caption, .medium)).foregroundStyle(.white).lineLimit(1)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Capsule().fill(theme.accentDeep.opacity(0.85))).padding(4)
+                            .frame(maxWidth: Self.coverW, alignment: .leading)
+                    }
+                }
                 .overlay(alignment: .bottomTrailing) {
                     if b.todayMinutes > 0 {
                         Text("\(b.todayMinutes)′").font(Typo.number(Typo.Size.caption)).foregroundStyle(.white)
@@ -135,6 +144,18 @@ struct BookshelfView: View {
         .contextMenu {
             Button { renameDraft = b.title; renaming = b } label: { Label("改书名", systemImage: "pencil") }
             Button { coverFor = b } label: { Label("换封面", systemImage: "photo") }
+            if model.companions.count > 1 || b.onlyFor != nil {
+                Menu {
+                    Button { Task { await store.share(b, with: nil, api: session.api) } } label: {
+                        if b.onlyFor == nil { Label("所有人", systemImage: "checkmark") } else { Text("所有人") }
+                    }
+                    ForEach(model.companions) { c in
+                        Button { Task { await store.share(b, with: c.id, api: session.api) } } label: {
+                            if b.onlyFor == c.id { Label("只给 \(c.name)", systemImage: "checkmark") } else { Text("只给 \(c.name)") }
+                        }
+                    }
+                } label: { Label("给谁看", systemImage: "person.crop.circle") }
+            }
             Button(role: .destructive) { confirmDelete = b } label: { Label("拿下书架", systemImage: "trash") }
         }
     }

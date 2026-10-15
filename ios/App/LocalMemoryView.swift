@@ -3,6 +3,7 @@ import SwiftUI
 
 // MARK: - 本地记忆库的原生页（10-11 第 20 版）：本地库没有网页，这页直接读写 LocalMemory，
 // 列表能搜能改能钉；星图照 mele-memory 网页版的样子用 Canvas 自己画（球面力导向、呼吸的爱心、标签行星）。
+// 10-15：连着 Mele Host 时同一页读 Host 上 TA 那本（server/api/routes_memories.py），数据从哪来看 MemoryShelf。
 
 struct LocalMemoryItemRow: Identifiable, Equatable {
     let id: Int
@@ -23,6 +24,14 @@ struct LocalMemoryItemRow: Identifiable, Equatable {
         byNames = m.by.compactMap { s.companion($0) }.map { ($0["persona"] as? [String: Any])?["name"] as? String ?? "TA" }
     }
 
+    /// Host 上的一条（routes_memories._view）：Host 的记忆没有标题，也不分谁记得
+    init(host d: [String: Any]) {
+        id = d["id"] as? Int ?? 0; kind = d["kind"] as? String ?? "memory"; title = ""
+        content = d["content"] as? String ?? ""; tags = d["tags"] as? [String] ?? []
+        importance = d["importance"] as? Int ?? 5; resolved = d["resolved"] as? Bool ?? false
+        createdAt = LocalStore.date(d["created_at"]); byNames = []
+    }
+
     var sharedLine: String? {
         guard byNames.count >= 2 else { return nil }
         let head = byNames.dropLast().joined(separator: "、")
@@ -40,18 +49,125 @@ enum LocalMemoryVaultPick {
     static var library: LocalMemory { LocalMemory.vault(current) }
 }
 
+/// 连着 Host 时看哪个 TA 的那本（记在本机）；没选过 / 那个 TA 没了就看第一个
+enum HostMemoryPick {
+    static let key = "hostMemoryCompanion"
+    static func resolve(_ picked: String, _ companions: [CompanionDTO]) -> String {
+        let ids = companions.map { $0.id.uuidString.lowercased() }
+        return ids.contains(picked) ? picked : ids.first ?? ""
+    }
+}
+
+/// 记忆库页的数据从哪来（10-15）：手机里那本，或 Mele Host 上某个 TA 那本。页面只认这几个动作
+enum MemoryShelf {
+    case local(LocalMemory)
+    case host(APIClient, companion: String)
+
+    /// 主屏星图小组件用：连 Host 看记忆库页选的那个 TA，本机看选的那本
+    @MainActor static func current(_ model: AppModel) -> MemoryShelf {
+        Lite.hosted ? .host(model.api, companion: HostMemoryPick.resolve(UserDefaults.standard.string(forKey: HostMemoryPick.key) ?? "", model.companions))
+                    : .local(LocalMemoryVaultPick.library)
+    }
+
+    var isHost: Bool { if case .host = self { true } else { false } }
+
+    private func path(_ api: APIClient, _ cid: String, _ tail: String = "") -> String { "companions/\(cid)/memories\(tail)" }
+
+    func rows() async -> [LocalMemoryItemRow] {
+        switch self {
+        case .local(let lib): return lib.all.sorted { $0.createdAt > $1.createdAt }.map(LocalMemoryItemRow.init)
+        case .host(let api, let cid):
+            guard !cid.isEmpty, let raw = try? await api.raw("GET", path(api, cid)) as? [[String: Any]] else { return [] }
+            return raw.map(LocalMemoryItemRow.init(host:))
+        }
+    }
+
+    func forget(_ id: Int) async {
+        switch self {
+        case .local(let lib): _ = lib.forget(id: id)
+        case .host(let api, let cid): try? await api.send("DELETE", path(api, cid, "/\(id)"))
+        }
+    }
+
+    func pin(_ id: Int, _ on: Bool) async {
+        switch self {
+        case .local(let lib): _ = lib.pin(id: id, pinned: on)
+        case .host(let api, let cid): _ = try? await api.raw("PATCH", path(api, cid, "/\(id)"), json: ["pinned": on])
+        }
+    }
+
+    func resolve(_ id: Int, _ on: Bool) async {
+        switch self {
+        case .local(let lib): _ = lib.resolve(id: id, resolved: on)
+        case .host(let api, let cid): _ = try? await api.raw("PATCH", path(api, cid, "/\(id)"), json: ["resolved": on])
+        }
+    }
+
+    /// item 为 nil = 新写一条
+    func save(_ item: LocalMemoryItemRow?, content: String, title: String, tags: [String], importance: Int, pinned: Bool) async {
+        switch self {
+        case .local(let lib):
+            if let item {
+                _ = lib.update(id: item.id, content: content, title: title, tags: tags, importance: importance)
+                if pinned != (item.kind == "core") { _ = lib.pin(id: item.id, pinned: pinned) }
+            } else {
+                let r = lib.remember(content: content, title: title, tags: tags, importance: importance)
+                if pinned, let json = r.structuredJSON?.data(using: .utf8),
+                   let d = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+                   let id = (d["memory"] as? [String: Any])?["id"] as? Int {
+                    _ = lib.pin(id: id, pinned: true)
+                }
+            }
+        case .host(let api, let cid):
+            let body: [String: Any] = ["content": content, "tags": tags, "importance": importance, "pinned": pinned]
+            if let item { _ = try? await api.raw("PATCH", path(api, cid, "/\(item.id)"), json: body) }
+            else { _ = try? await api.raw("POST", path(api, cid), json: body) }
+        }
+    }
+
+    func graph() async -> LocalMemory.StarGraph? {
+        switch self {
+        case .local(let lib): return lib.graph()
+        case .host(let api, let cid):
+            guard !cid.isEmpty, let d = try? await api.raw("GET", path(api, cid, "/stars")) as? [String: Any] else { return nil }
+            let stars = (d["stars"] as? [[String: Any]] ?? []).map {
+                LocalMemory.Star(id: $0["id"] as? Int ?? 0, label: $0["label"] as? String ?? "", title: "",
+                                 tags: $0["tags"] as? [String] ?? [], weight: $0["weight"] as? Double ?? 0,
+                                 content: $0["content"] as? String ?? "")
+            }
+            let edges = (d["edges"] as? [[String: Any]] ?? []).map {
+                LocalMemory.StarEdge(a: $0["a"] as? Int ?? 0, b: $0["b"] as? Int ?? 0, strength: $0["strength"] as? Double ?? 0)
+            }
+            let hubs = (d["hubs"] as? [[String: Any]] ?? []).map {
+                LocalMemory.StarHub(label: $0["label"] as? String ?? "", members: Set($0["members"] as? [Int] ?? []))
+            }
+            let me = d["user_label"] as? String ?? ""
+            return LocalMemory.StarGraph(stars: stars, edges: edges, hubs: hubs, mine: Set(d["mine"] as? [Int] ?? []),
+                                         userLabel: me.isEmpty ? String(localized: "你") : me)
+        }
+    }
+}
+
 /// 嵌在「记忆库」软件（MemoryRoomView）的 NavigationStack 里：工具栏按钮会并进外面的导航条
 struct LocalMemoryListBody: View {
     @EnvironmentObject private var theme: AppTheme
+    @EnvironmentObject private var model: AppModel
     var startOnGraph = false
     @State private var rows: [LocalMemoryItemRow] = []
+    @State private var loaded = false
     @State private var query = ""
     @State private var editing: LocalMemoryEditTarget?
     @State private var showGraph = false
     @AppStorage(LocalMemoryVaultPick.key) private var vault = LocalMemory.sharedScope
+    @AppStorage(HostMemoryPick.key) private var hostPick = ""
     @State private var scopes: [(id: String, name: String)] = []
 
-    private var lib: LocalMemory { LocalMemory.vault(scopes.contains { $0.id == vault } ? vault : LocalMemory.sharedScope) }
+    /// 本机：分仓里选的那本；连 Host：选的那个 TA（Host 上每个 TA 本来就各记各的）
+    private var pick: String {
+        Lite.hosted ? HostMemoryPick.resolve(hostPick, model.companions)
+                    : (scopes.contains { $0.id == vault } ? vault : LocalMemory.sharedScope)
+    }
+    private var shelf: MemoryShelf { Lite.hosted ? .host(model.api, companion: pick) : .local(LocalMemory.vault(pick)) }
 
     private var shown: [LocalMemoryItemRow] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -66,14 +182,18 @@ struct LocalMemoryListBody: View {
             List {
                 // 分仓（10-11）：有 TA 单独记一本时，顶上选看哪本
                 if scopes.count > 1 {
-                    Picker(String(localized: "看哪本"), selection: Binding(get: { lib === LocalMemory.shared ? LocalMemory.sharedScope : vault },
-                                                                       set: { vault = $0; reload() })) {
+                    Picker(String(localized: "看哪本"), selection: Binding(get: { pick }, set: {
+                        if Lite.hosted { hostPick = $0 } else { vault = $0 }
+                        Task { await reload() }
+                    })) {
                         ForEach(scopes, id: \.id) { sc in Text(sc.name).tag(sc.id) }
                     }
                     .pickerStyle(.menu)
                     .listRowBackground(Color.clear)
                 }
-                if rows.isEmpty {
+                if !loaded {
+                    ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40).listRowBackground(Color.clear)
+                } else if rows.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "sparkles").font(Typo.icon(28)).foregroundStyle(theme.inkFaint)
                         Text("聊着聊着 TA 会自己记下来").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
@@ -92,19 +212,17 @@ struct LocalMemoryListBody: View {
                         .buttonStyle(.plain)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
-                                _ = lib.forget(id: m.id)
-                                reload()
+                                rows.removeAll { $0.id == m.id }
+                                Task { await shelf.forget(m.id); await reload() }
                             } label: { Label(String(localized: "删除"), systemImage: "trash") }
                         }
                         .swipeActions(edge: .leading) {
                             Button {
-                                _ = lib.pin(id: m.id, pinned: m.kind != "core")
-                                reload()
+                                Task { await shelf.pin(m.id, m.kind != "core"); await reload() }
                             } label: { Label(m.kind == "core" ? String(localized: "取消钉住") : String(localized: "钉住"), systemImage: "pin") }
                                 .tint(theme.accentDeep)
                             Button {
-                                _ = lib.resolve(id: m.id, resolved: !m.resolved)
-                                reload()
+                                Task { await shelf.resolve(m.id, !m.resolved); await reload() }
                             } label: { Label(m.resolved ? String(localized: "重新打开") : String(localized: "了结"), systemImage: "checkmark.circle") }
                                 .tint(.green.opacity(0.7))
                         }
@@ -121,22 +239,25 @@ struct LocalMemoryListBody: View {
                     Button { editing = LocalMemoryEditTarget(item: nil) } label: { Image(systemName: "plus") }
                 }
             }
+            .refreshable { await reload() }
             .task {
-                reload()
                 if startOnGraph { showGraph = true }
+                await reload()
             }
-            .sheet(item: $editing, onDismiss: reload) { t in
-                LocalMemoryEditView(item: t.item, lib: lib).environmentObject(theme)
+            .sheet(item: $editing, onDismiss: { Task { await reload() } }) { t in
+                LocalMemoryEditView(item: t.item, shelf: shelf).environmentObject(theme)
                     .environment(\.colorScheme, .light)
             }
             .fullScreenCover(isPresented: $showGraph) {
-                LocalStarmapView(lib: lib).environmentObject(theme)
+                LocalStarmapView(shelf: shelf).environmentObject(theme)
             }
     }
 
-    private func reload() {
-        scopes = LocalMemory.scopes(LocalHost.shared.store)
-        rows = lib.all.sorted { $0.createdAt > $1.createdAt }.map(LocalMemoryItemRow.init)
+    private func reload() async {
+        scopes = Lite.hosted ? model.companions.map { ($0.id.uuidString.lowercased(), $0.name) }
+                             : LocalMemory.scopes(LocalHost.shared.store)
+        rows = await shelf.rows()
+        loaded = true
     }
 
     private func row(_ m: LocalMemoryItemRow) -> some View {
@@ -184,7 +305,8 @@ struct LocalMemoryEditView: View {
     @EnvironmentObject private var theme: AppTheme
     @Environment(\.dismiss) private var dismiss
     let item: LocalMemoryItemRow?
-    var lib: LocalMemory = .shared
+    var shelf: MemoryShelf = .local(.shared)
+    @State private var saving = false
     @State private var title = ""
     @State private var content = ""
     @State private var tags = ""
@@ -195,7 +317,9 @@ struct LocalMemoryEditView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField(String(localized: "一行标题（可以空着）"), text: $title)
+                    if !shelf.isHost {      // Host 上的记忆没有标题
+                        TextField(String(localized: "一行标题（可以空着）"), text: $title)
+                    }
                     TextEditor(text: $content).frame(minHeight: 120)
                 }
                 Section {
@@ -211,8 +335,7 @@ struct LocalMemoryEditView: View {
                 if let item {
                     Section {
                         Button(String(localized: "删除这条记忆"), role: .destructive) {
-                            _ = lib.forget(id: item.id)
-                            dismiss()
+                            Task { await shelf.forget(item.id); dismiss() }
                         }
                     }
                 }
@@ -222,8 +345,8 @@ struct LocalMemoryEditView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(String(localized: "取消")) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(String(localized: "存")) { save() }
-                        .disabled(content.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(String(localized: "存")) { Task { await save() } }
+                        .disabled(saving || content.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             .onAppear {
@@ -235,20 +358,11 @@ struct LocalMemoryEditView: View {
         }
     }
 
-    private func save() {
+    private func save() async {
+        saving = true
         let list = tags.replacingOccurrences(of: "，", with: ",").replacingOccurrences(of: "、", with: ",")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if let item {
-            _ = lib.update(id: item.id, content: content, title: title, tags: list, importance: importance)
-            if pinned != (item.kind == "core") { _ = lib.pin(id: item.id, pinned: pinned) }
-        } else {
-            let r = lib.remember(content: content, title: title, tags: list, importance: importance)
-            if pinned, let json = r.structuredJSON?.data(using: .utf8),
-               let d = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-               let id = (d["memory"] as? [String: Any])?["id"] as? Int {
-                _ = lib.pin(id: id, pinned: true)
-            }
-        }
+        await shelf.save(item, content: content, title: title, tags: list, importance: importance, pinned: pinned)
         dismiss()
     }
 }
@@ -468,7 +582,7 @@ enum StarPainter {
 struct LocalStarmapView: View {
     @EnvironmentObject private var theme: AppTheme
     @Environment(\.dismiss) private var dismiss
-    var lib: LocalMemory = LocalMemoryVaultPick.library
+    var shelf: MemoryShelf = .local(LocalMemoryVaultPick.library)
     @State private var graph: LocalMemory.StarGraph?
     @State private var scene: StarScene?
     @State private var stack: [StarScene] = []
@@ -516,7 +630,7 @@ struct LocalStarmapView: View {
         .overlay(alignment: .top) { topBar }
         .overlay(alignment: .bottom) { infoCard }
         .task {
-            let g = lib.graph()
+            guard let g = await shelf.graph() else { return }
             graph = g
             scene = StarLayout.build(g)
         }
@@ -606,6 +720,7 @@ struct LocalStarmapView: View {
 /// 小组件里的星球：只画，不能碰；不在屏幕上就停
 struct LocalStarGlobeView: View {
     var paused = false
+    var shelf: MemoryShelf? = nil       // nil = 记忆库页选的那本（本机）
     @State private var scene: StarScene?
     @State private var spin = 0.0
     @State private var lastT = 0.0
@@ -623,7 +738,9 @@ struct LocalStarGlobeView: View {
                 lastT = new
             }
         }
-        .task { scene = StarLayout.build(LocalMemoryVaultPick.library.graph()) }   // 记忆库页选的那本
+        .task {                                                   // 记忆库页选的那本 / 那个 TA
+            if let g = await (shelf ?? .local(LocalMemoryVaultPick.library)).graph() { scene = StarLayout.build(g) }
+        }
     }
 }
 #endif

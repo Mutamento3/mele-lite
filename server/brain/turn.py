@@ -27,7 +27,7 @@ from llm.errors import LLMError, context_full
 from llm.router import Route, call, make_adapter
 from llm.types import ChatRequest, ImagePart, Msg, ToolRound, Usage
 
-from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, probe as sentinel, reactions, tarot, vision, voice, wallet
+from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, media, probe as sentinel, reactions, tarot, vision, voice, wallet
 from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
 from . import repeats
@@ -497,7 +497,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         if listening:                # 耳朵（09-30）：TA 说话时在放的歌；有它的这轮〔TA 那边〕不再写「在听」
             before = [*before, listening]
             items = {k: v for k, v in items.items() if k != "music"}
-        reading = await _safe(books.reading_line(pool, acc, now, lang), "")
+        reading = await _safe(books.reading_line(pool, acc, now, lang, comp), "")
         if reading:                  # 书架（10-02）：TA 这 3 分钟里翻过页的那本
             before = [*before, reading]
         # 世界书（09-30）：TA 这句 + 上一句 + 它上一句里碰到关键词的；醒来只看 TA 最后一句
@@ -506,7 +506,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         if book:
             before = [*before, book]
         if not wake:                 # 偶尔想起（10-14）：隔几轮随手抽一条梗，它自己也会用
-            occ = lore.occasional(lore_all, state, turn_no, lang)
+            occ = lore.occasional(lore_all, state, turn_no, lang,
+                                 every=await _safe(lore.get_every(pool, acc), lore.OCCASIONAL_EVERY))
             if occ:
                 before = [*before, occ]
         side = context_line.render(items, now, settings.tz, lang)
@@ -517,9 +518,11 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     outside = mcp.Toolbox()                      # 用户自己接的 MCP 服务（10-05，Host）：无痕不给；连不上的这一轮跳过
     if not scope.incognito and group is None and settings.mcp_servers:
         outside = await _safe(mcp.toolbox(pool, getattr(deps.keys, "box", None), acc, settings.mcp_servers), mcp.Toolbox())
+    draw_on = (not scope.incognito and group is None and deps.files_dir is not None   # 挑了画图钥匙才给 draw（10-15）
+               and await _safe(media.image_route(pool, getattr(deps.keys, "box", None), acc), None) is not None)
     parts = ContextParts(
         tools=[t for t in tool_specs() if t.name in GROUP_TOOLS] if group is not None
-        else tool_specs(incognito=scope.incognito) + outside.specs,
+        else tool_specs(incognito=scope.incognito, extra=("draw",) if draw_on else ()) + outside.specs,
         base=(G.room_rules(zh=lang == "zh", group=group.name, me=persona.name or "TA", user_name=ulabel,
                            others=list(group.others)) + "\n\n" if group is not None else "") + render_base(persona, core, lang,
                          monologue="\n\n".join(x for x in (mono_rules, inner_voice.rules(settings) if settings.inner_voice else "") if x),
@@ -548,7 +551,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     ctx = ToolContext(pool=pool, embedder=deps.embedder, user_id=comp, account_id=acc, now=now, lang=lang,
                       edit_ref=edit_ref, allowed=INCOGNITO_TOOLS if scope.incognito else (GROUP_TOOLS if group is not None else None),
                       tz=settings.tz,
-                      names=names, deps=deps, mcp=outside.route)
+                      names=names, deps=deps, mcp=outside.route, conversation=conv)
     started = time.monotonic()                   # 「思考了 x 秒」：从开口到说完（含中间调工具）
     out, err = None, None
     try:
@@ -644,13 +647,15 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         log.warning("reply came out empty after cutting the monologue; thinking was: %s", out.thinking[-2000:])
     if voice_text and out.text.strip():
         await emit({"type": "inner_voice", "text": voice_text})
-    if out.text.strip():
+    if out.text.strip() or ctx.drawn:
         saved = await archive.add_message(pool, conv, "assistant", out.text, thinking=out.thinking,
                                           tools="\n".join(out.tool_notes), cards=out.cards, thinking_ms=thinking_ms,
                                           inner_voice=voice_text, now=deps.now(),
                                           speaker=comp if group is not None else None,
                                           speaker_name=(persona.name or "TA") if group is not None else "")
         await _safe(voice.attach(pool, acc, clip_ids, saved.id), None)
+        if ctx.drawn:                                # 它画的图挂在这句上（10-15）
+            await _safe(files.claim(pool, conv, ctx.drawn, saved.id), [])
         if group is not None:
             await groups.set_last_speaker(pool, conv, comp)
         if not wake and not scope.incognito and group is None:    # 「划线说两句」挂着线头：回话抄一份进页边（10-02 书架）
