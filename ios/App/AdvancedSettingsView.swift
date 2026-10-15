@@ -105,17 +105,6 @@ struct AdvancedSettingsView: View {
                 }
             } header: { GlassHeader(String(localized: "思考")) }
 
-            // 回声用哪把钥匙（Lite 本机，10-04 Aporia）：默认跟聊天同一个；想用便宜的写账就换一把
-            if Lite.local {
-                Tile {
-                    RowPicker(selection: Binding(get: { store.settings["echo_key_id"] as? String ?? "" },
-                                                 set: { store.setNow(settings: ["echo_key_id": $0.isEmpty ? NSNull() : $0]) })) {
-                        Text("跟聊天一样").tag("")
-                        ForEach(store.keys) { k in Text("\(k.chatModel) ··\(k.last4)").tag(k.id) }
-                    } label: { row("回声用哪把钥匙", "卷账本时用它写；写不好会换回聊天那把再试一次") }
-                } header: { GlassHeader(String(localized: "回声")) }
-            }
-
             if store.keys.first(where: { $0.id == store.keyID })?.provider == "anthropic" {
                 Tile {
                     Toggle(isOn: store.s("cache_keepalive", false)) {

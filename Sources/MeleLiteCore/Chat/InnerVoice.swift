@@ -3,9 +3,14 @@ import Foundation
 /// 回复后的心声（10-11 内测反馈）：TA 说完话以后，最后写一段 [心声]…[/心声]，App 画成这一轮最后一张小卡片。
 /// 独白是开口前想事；心声是说完以后心里真实的反应，好玩在嘴上说的和心里想的对不上。服务器 brain/inner_voice.py 同一份意思。
 public enum InnerVoice {
-    static let open = try! NSRegularExpression(pattern: #"\[\s*(?:心声|inner\s*voice)\s*\]"#, options: .caseInsensitive)
+    static let word = #"(?:心声|心聲|inner\s*voice)"#          // 括号跟独白一样认【】<>［］（10-15）
+    static let open = try! NSRegularExpression(pattern: Monologue.L + #"\s*"# + word + #"\s*"# + Monologue.R, options: .caseInsensitive)
     static let close = try! NSRegularExpression(
-        pattern: #"\[\s*(?:/\s*(?:心声|inner\s*voice)|(?:心声|inner\s*voice)\s*(?:/|完|结束|end))\s*\]"#, options: .caseInsensitive)
+        pattern: Monologue.L + #"\s*(?:/\s*"# + word + "|" + word + #"\s*(?:/|完|结束|結束|end))\s*"# + Monologue.R, options: .caseInsensitive)
+
+    static func has(_ text: String) -> Bool {
+        open.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
+    }
 
     /// 老写法（10-12 前历史里是「（当时心里：…）」，模型会照着学、不写标签）：从这儿到结尾都算心声
     static let oldShape = try! NSRegularExpression(pattern: #"[（(]\s*(?:当时心里|what i felt then)\s*[:：]"#, options: .caseInsensitive)

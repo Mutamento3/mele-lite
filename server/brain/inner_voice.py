@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 
-from .monologue import _forms
+from .monologue import _L, _R, _forms
 from .settings import Settings
 
-_OPEN = re.compile(r"\[\s*(?:心声|inner\s*voice)\s*\]", re.I)
-_CLOSE = re.compile(r"\[\s*(?:/\s*(?:心声|inner\s*voice)|(?:心声|inner\s*voice)\s*(?:/|完|结束|end))\s*\]", re.I)
+_VW = r"(?:心声|心聲|inner\s*voice)"         # 括号跟独白一样认【】<>［］（10-15）
+_OPEN = re.compile(rf"{_L}\s*{_VW}\s*{_R}", re.I)
+_CLOSE = re.compile(rf"{_L}\s*(?:/\s*{_VW}|{_VW}\s*(?:/|完|结束|結束|end))\s*{_R}", re.I)
 
 FACTORY = {
     "zh": "说完以后，心里真实的反应：诚实、直白、不修饰。嘴上没说的那部分写出来——口是心非的、没好意思说的、忍住的、偷偷高兴的。几行就够。用「我」，{p}一直是「{p}」，不写「你」。",
@@ -23,6 +24,10 @@ HOOK = {"zh": "〔心声〕说完以后，最后写 [心声]…[/心声]，写�
 # 10-12：以前写成「（当时心里：…）」，模型照着历史学，心声不写标签直接漏进正文——历史里就长成它该写的样子
 CONTEXT = {"zh": "[心声]\n{v}\n[/心声]", "en": "[inner voice]\n{v}\n[/inner voice]"}
 _OLD_SHAPE = re.compile(r"[（(]\s*(?:当时心里|what i felt then)\s*[:：]", re.I)
+
+
+def has(text: str) -> bool:
+    return bool(_OPEN.search(text))
 
 
 def split(text: str) -> tuple[str, str]:

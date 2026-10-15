@@ -48,8 +48,6 @@ struct VoiceSettingsSection: View {
     @State private var quota: VoiceQuotaDTO?
     @State private var cache: [String: Data] = [:]
     @State private var designing = false
-    @State private var addingKey = false
-    @State private var keyText = ""
     @State private var note: String?
     @State private var open = false          // 平时只露频次 + 选中的嗓子，点开才展开（10-03）
 
@@ -134,15 +132,14 @@ struct VoiceSettingsSection: View {
                                    : String(localized: "声音额度还剩 \(quota.charsLeft) 字"))
                         .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
                 }
-                Button(quota?.ownKey == true ? "换一把 ElevenLabs key" : "填自己的 ElevenLabs key") { addingKey = true }
-                    .buttonStyle(.plain).foregroundStyle(theme.accent)
+                Hint(text: String(localized: "声音 key 在 Me → 钥匙串里加（选 ElevenLabs）。"))
               }
             }
             if let note { Text(note).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red) }
         } header: { GlassHeader(String(localized: "声音")) } footer: {
             if open {
-                Text(Lite.on ? "它想说出声的时候会发语音条；长按它的任何一句也能「念给我听」；你也能按住麦克风发语音。都走你自己的 ElevenLabs key。"
-                             : "它想说出声的时候会发语音条；长按它的任何一句也能「念给我听」。描述一把嗓子要会员或者自己的 ElevenLabs key。")
+                Text(Lite.on ? "TA 想说出声的时候会发语音条；长按 TA 的任何一句也能「念给我听」；你也能按住麦克风发语音。都走你自己的 ElevenLabs key。"
+                             : "TA 想说出声的时候会发语音条；长按 TA 的任何一句也能「念给我听」。描述一把嗓子要会员或者自己的 ElevenLabs key。")
             }
         }
         .task { await load() }
@@ -152,14 +149,6 @@ struct VoiceSettingsSection: View {
                 store.settings["voice_name"] = name
             }
             .presentationDetents([.large])
-        }
-        .alert("ElevenLabs key", isPresented: $addingKey) {
-            SecureField("sk_…", text: $keyText)
-            Button("保存") { Task { await saveKey() } }
-            Button("取消", role: .cancel) { keyText = "" }
-        } message: {
-            Text(Lite.on ? "填了以后，它要念的话和你发的语音会直接发给 ElevenLabs，用你的 key 计费。"
-                         : "填了以后声音走你自己的 key，不扣额度。")
         }
     }
 
@@ -189,19 +178,6 @@ struct VoiceSettingsSection: View {
             note = nil
         } catch {
             note = (error as? APIError)?.message ?? String(localized: "没换成")
-        }
-    }
-
-    private func saveKey() async {
-        let k = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        keyText = ""
-        guard !k.isEmpty else { return }
-        do {
-            _ = try await store.api.raw("POST", "keys/elevenlabs", json: ["api_key": k])
-            note = nil
-            quota = try? await store.api.call("GET", "voice/quota")
-        } catch {
-            note = (error as? APIError)?.message ?? String(localized: "key 没存上")
         }
     }
 }

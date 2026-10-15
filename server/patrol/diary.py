@@ -77,7 +77,7 @@ async def _free_peak(deps, account: UUID, companion: UUID, now: datetime) -> dat
     from brain.turn import resolve_route
     from llm.catalog import deepseek_peak_until
     try:
-        route = await resolve_route(deps.keys, Scope(account, companion, None))
+        route = await resolve_route(deps.keys, Scope(account, companion, None), chore="diary")
     except TrialOver:
         route = getattr(deps.keys, "trial", None)
     if route is None or not route.trial or route.provider != "deepseek":

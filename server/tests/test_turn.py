@@ -80,6 +80,23 @@ async def test_tool_loop_runs_tools_and_emits_cards(pool, user_a):
     assert (await archive.get_state(pool, user_a))["last_tools"] == ["memory_remember"]
 
 
+async def test_tool_call_written_as_text_is_run_not_shown(pool, user_a):
+    # 10-15 内测：本机模式 <function_calls><invoke …> 原样进了气泡；</args_json> 还写漏了
+    raw = ('<function_calls>\n<invoke name="memory_remember">\n<args_json>{"content": "小满对芒果过敏", "importance": 8}'
+           '</invoke>\n</function_calls>')
+    m = FakeModel([raw, "记下啦"])
+    ev = await turn(make_deps(pool, m), user_a, "我对芒果过敏")
+    assert [e["text"] for e in of(ev, "bubble")] == ["记下啦"]
+    assert "替你调了" in m.requests[1].messages[-1].text and "已记住" in m.requests[1].messages[-1].text
+    assert (await M.list_memories(pool, user_a))[0].content == "小满对芒果过敏"
+
+
+async def test_text_call_to_unknown_tool_is_just_dropped(pool, user_a):
+    m = FakeModel(['好呀<invoke name="nope"><parameter name="x">1</parameter></invoke>'])
+    ev = await turn(make_deps(pool, m), user_a, "嗨")
+    assert [e["text"] for e in of(ev, "bubble")] == ["好呀"] and len(m.requests) == 1
+
+
 async def test_tool_rounds_are_capped(pool, user_a):
     script = [{"calls": [("memory_search", {"query": f"第{i}次"})]} for i in range(8)]
     script.append({"text": "不查了", "calls": [("memory_search", {"query": "还要"})]})

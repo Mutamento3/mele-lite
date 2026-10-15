@@ -202,7 +202,7 @@ enum LocalImport {
         let zh = (settings["lang"] as? String ?? "zh") == "zh"
         let name = (comp["persona"] as? [String: Any])?["name"] as? String ?? "Lumi"
         let userName = host.profile["name"] as? String ?? ""
-        let legs = LocalEcho.models(host, comp)
+        let legs = LocalEcho.models(host, comp, chore: "import")
         func fail(_ why: String) { job["state"] = "failed"; job["error"] = why; s.write(jobFile(cid), job) }
         guard !legs.isEmpty else { return fail(String(localized: "还没给 TA 配 key，或者还没同意把消息发给这家模型")) }
         let chunks = job["chunks"] as? [String] ?? []

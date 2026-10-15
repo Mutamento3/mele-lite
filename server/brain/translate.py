@@ -23,7 +23,7 @@ async def thinking_zh(deps, scope: Scope, message_id: int, thinking: str, now: d
     if got:
         return got
     from .turn import get_adapter, resolve_route
-    route = await resolve_route(deps.keys, scope)
+    route = await resolve_route(deps.keys, scope, chore="translate")
     model = route.ledger_model or route.chat_model
     reply = await call(get_adapter(deps, route), ChatRequest(
         model=model, system=[Block("You translate faithfully into natural Chinese.")],

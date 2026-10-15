@@ -47,3 +47,22 @@ def test_close_only_means_everything_before_is_monologue():
     mono, body = split_monologue("她问我今天累不累。\n\n其实有点累，不想让她担心。\n[/独白]\n\n不累，看到你就不累了。\n\n你呢，今天怎么样？")
     assert mono == "她问我今天累不累。\n\n其实有点累，不想让她担心。"
     assert body == "不累，看到你就不累了。\n\n你呢，今天怎么样？"
+
+
+def test_monologue_odd_brackets_and_words_10_15():
+    from brain.monologue import split_monologue
+    assert split_monologue("【独白】\n她今天累了。\n【/独白】\n早点睡吧你。") == ("她今天累了。", "早点睡吧你。")
+    assert split_monologue("<独白>她在笑</独白>你笑什么") == ("她在笑", "你笑什么")
+    assert split_monologue("[独白开始]\n她回来了。\n[独白结束]\n欢迎回家") == ("她回来了。", "欢迎回家")
+    assert split_monologue("[内心独白]她\n[/内心独白]好") == ("她", "好")
+
+
+def test_inner_voice_survives_unclosed_monologue_10_15():
+    from brain import inner_voice
+    from brain.monologue import split_monologue
+    raw = "[独白]\n她又在撒娇。\n\n嗯，抱一下。\n\n[心声]\n其实想抱很久了。\n[/心声]"
+    mono, body = split_monologue(raw)
+    assert mono == "她又在撒娇。\n\n嗯，抱一下。"          # 没「你」的正文认不出来（老规矩），但心声不能丢
+    assert inner_voice.split(body)[1] == "其实想抱很久了。"
+    mono, body = split_monologue("[独白]\n她累了\n[/独白]\n你先睡。\n【心声】舍不得【/心声】")
+    assert (mono, inner_voice.split(body)) == ("她累了", ("你先睡。", "舍不得"))

@@ -353,7 +353,7 @@ enum LocalTarot {
         // 用谁的钥匙：解的那个联系人；解牌人用问牌时所在的那个（删了就换第一个）
         let keyOwner = reader.flatMap { s.companion($0) }
             ?? (x["route_from"] as? String).flatMap { s.companion($0) } ?? comps.first
-        guard let owner = keyOwner, let (provider, key) = host.route(for: owner), !LiteConsent.book.needsAsk(provider) else { return .skipped }
+        guard let owner = keyOwner, let (provider, key) = host.route(chore: "tarot", else: host.route(for: owner)), !LiteConsent.book.needsAsk(provider) else { return .skipped }
         let settings = owner["settings"] as? [String: Any] ?? [:]
         let zh = (settings["lang"] as? String ?? "zh") == "zh"
         var ask = askText(x, zh: zh, followup: followup)

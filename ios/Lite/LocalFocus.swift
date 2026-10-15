@@ -122,7 +122,7 @@ enum LocalFocus {
         let zh = (st["lang"] as? String ?? "zh") == "zh"
 
         var lines: [String] = [], lockAfter = 0, peek = ""
-        if let (routed, key) = host.route(for: comp), !LiteConsent.book.needsAsk(routed) {
+        if let (routed, key) = host.route(chore: "focus", else: host.route(for: comp)), !LiteConsent.book.needsAsk(routed) {
             var provider = routed
             provider.thinking = false
             let contact = LocalBrain.contact(comp, provider: provider)

@@ -6,15 +6,25 @@ import Foundation
 public enum Monologue {
     /// 收尾标记模型常写走样（[独白 完] [独白结束] [end monologue]……），所以不看收尾长什么样：
     /// 第一个标记是开头，紧跟着的下一个标记就是收尾。
+    /// 10-15 内测：括号写成【独白】<独白>［独白］、词写成 [内心独白] [独白开始] 的也认（不认就整段漏进正文）
+    static let L = #"[\[［【<〈]"#, R = #"[\]］】>〉]"#
     static let tag = try! NSRegularExpression(
-        pattern: #"\[\s*(?:/|end\s+)?\s*(?:独白|monologue)\s*(?:/|完|结束|end)?\s*\]"#, options: [.caseInsensitive])
+        pattern: L + #"\s*(?:/|end\s+)?\s*(?:(?:内心\s*)?(?:独白|獨白)|(?:inner\s+)?monologue)\s*(?:/|完|结束|結束|end|开始|開始|start)?\s*"# + R,
+        options: [.caseInsensitive])
     static let saysYou = try! NSRegularExpression(pattern: #"你|\byou\b"#, options: [.caseInsensitive])
     static let quoted = try! NSRegularExpression(pattern: #"「[^」]*」|“[^”]*”|"[^"]*""#)
 
     /// (独白, 正文)。没写独白就是 ("", 原文)。
     /// 模型偶尔把独白写两遍（10-09 Aporia：DeepSeek 一轮里同一段 [独白]…[/独白] 出现两次，第二段原样漏进了正文）：
     /// 切完第一段，正文里还有成对的就接着切，内容一样的只留一份
+    /// 心声先拿出来再切独白、切完接回正文末尾（10-15 内测「心声一会有一会没有」：[/独白] 漏写时心声被一起收进了独白）
     public static func split(_ text: String) -> (monologue: String, body: String) {
+        if InnerVoice.has(text) {
+            let (rest, voice) = InnerVoice.split(text)
+            let (mono, body) = split(rest)
+            return voice.isEmpty ? (mono, body)
+                : (mono, (body + "\n\n" + InnerVoice.contextLine(voice, zh: true)).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         var (mono, body) = splitOnce(text)
         guard !mono.isEmpty else { return (mono, body) }
         var monos = [mono]
@@ -28,7 +38,7 @@ public enum Monologue {
         return (mono, body)
     }
 
-    static let closeShape = try! NSRegularExpression(pattern: #"^\[\s*(?:/|end\s)|(?:/|完|结束|end)\s*\]$"#, options: [.caseInsensitive])
+    static let closeShape = try! NSRegularExpression(pattern: "^" + L + #"\s*(?:/|end\s)|(?:/|完|结束|結束|end)\s*"# + R + "$", options: [.caseInsensitive])
     static func isClose(_ tag: String) -> Bool {
         closeShape.firstMatch(in: tag, range: NSRange(location: 0, length: (tag as NSString).length)) != nil
     }

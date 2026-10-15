@@ -65,3 +65,19 @@ import Testing
         #expect(body == "好。")
     }
 }
+
+@Suite struct MonologueTagShapes1015 {
+    @Test func oddBracketsAndWords() {
+        #expect(Monologue.split("【独白】\n她今天累了。\n【/独白】\n早点睡吧你。") == ("她今天累了。", "早点睡吧你。"))
+        #expect(Monologue.split("<独白>她在笑</独白>你笑什么") == ("她在笑", "你笑什么"))
+        #expect(Monologue.split("[独白开始]\n她回来了。\n[独白结束]\n欢迎回家") == ("她回来了。", "欢迎回家"))
+        #expect(Monologue.split("[内心独白]她\n[/内心独白]好") == ("她", "好"))
+    }
+    @Test func innerVoiceSurvivesUnclosedMonologue() {
+        let (_, body) = Monologue.split("[独白]\n她又在撒娇。\n\n嗯，抱一下。\n\n[心声]\n其实想抱很久了。\n[/心声]")
+        #expect(InnerVoice.split(body).voice == "其实想抱很久了。")
+        let (mono, b2) = Monologue.split("[独白]\n她累了\n[/独白]\n你先睡。\n【心声】舍不得【/心声】")
+        #expect(mono == "她累了")
+        #expect(InnerVoice.split(b2) == ("你先睡。", "舍不得"))
+    }
+}

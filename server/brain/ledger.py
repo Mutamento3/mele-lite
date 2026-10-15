@@ -421,11 +421,12 @@ async def _short(adapter, models: list[str], prompt: str, source: str, max_len: 
     对方的名字算进原文里：旧账写的是「TA」、用户后来填了名字，压的时候写出名字不算编造。"""
     spent: Spent = []
     source = f"{source}\n{who(user_name, lang)}"
-    for model in models:
+    for leg in models:
+        a, model = leg if isinstance(leg, tuple) else (adapter, leg)     # 腿可以是别的钥匙（10-15 钥匙串分活）
         req = ChatRequest(model=model, system=[Block(_SYSTEM[lang])], messages=[Msg("user", prompt)],
                           max_tokens=4000, thinking=False)
         try:
-            reply = await call(adapter, req)
+            reply = await call(a, req)
         except LLMError as e:
             log.warning("ledger %s via %s failed: %s", label, model, e)
             continue
@@ -522,7 +523,8 @@ async def age_day(adapter, models: list[str], text: str, d: date, age: int, quot
                   name: str, lang: str, user_name: str = "", group: str | None = None) -> tuple[str | None, Spent]:
     """把超了配额的一天压短。没压短（照抄交回）也算压不动，返回 None，留着下次卷的时候再试。
     模型清单里标了 age_piece 的（DeepSeek：一大段压不动、小段压得动），长的一天先切块，各压到按长度分的那份配额。"""
-    info = lookup(models[0])
+    first = models[0][1] if isinstance(models[0], tuple) else models[0]
+    info = lookup(first)
     size = info.age_piece if info else None
     if not size or len(text) <= size:
         prompt = group_age_prompt(text, d, age, quota, group=group, lang=lang) if group is not None else \

@@ -24,7 +24,9 @@ MODES = ("native", "monologue")
 # （09-27 Aporia看到它写了「[独白 完]」，旧的只认 [/独白]，结果把正文也当成独白收进去了）。
 # 所以不看收尾长什么样：第一个标记是开头，紧接着的下一个标记就是收尾。
 _SAYS_YOU = re.compile(r"你|\byou\b", re.I)
-_TAG = re.compile(r"\[\s*(?:/|end\s+)?\s*(?:独白|monologue)\s*(?:/|完|结束|end)?\s*\]", re.I)
+# 10-15 内测：括号写成【独白】<独白>［独白］、词写成 [内心独白] [独白开始] 的也认（不认就整段漏进正文）
+_L, _R = r"[\[［【<〈]", r"[\]］】>〉]"
+_TAG = re.compile(rf"{_L}\s*(?:/|end\s+)?\s*(?:(?:内心\s*)?(?:独白|獨白)|(?:inner\s+)?monologue)\s*(?:/|完|结束|結束|end|开始|開始|start)?\s*{_R}", re.I)
 
 
 def effective_mode(settings: Settings, info: ModelInfo | None) -> str:
@@ -40,7 +42,13 @@ def effective_mode(settings: Settings, info: ModelInfo | None) -> str:
 def split_monologue(text: str) -> tuple[str, str]:
     """(独白, 正文)。没写独白就是 ("", 原文)。
     模型偶尔把独白写两遍（10-09 Aporia在 Lite 上遇到：同一段 [独白]…[/独白] 出现两次，第二段漏进正文）：
-    切完第一段，正文里还有成对的就接着切，内容一样的只留一份。跟 MeleLiteCore Monologue.split 同一个规矩"""
+    切完第一段，正文里还有成对的就接着切，内容一样的只留一份。跟 MeleLiteCore Monologue.split 同一个规矩
+    心声先拿出来再切独白、切完接回正文末尾（10-15 内测「心声一会有一会没有」：[/独白] 漏写时心声被一起收进了独白）"""
+    from . import inner_voice
+    if inner_voice.has(text or ""):
+        rest, voice = inner_voice.split(text)
+        mono, body = split_monologue(rest)
+        return mono, (body + "\n\n" + inner_voice.CONTEXT["zh"].format(v=voice)).strip() if voice else body
     mono, body = _split_once(text)
     if not mono:
         return mono, body
@@ -55,7 +63,7 @@ def split_monologue(text: str) -> tuple[str, str]:
     return "\n\n".join(monos), body
 
 
-_CLOSE_SHAPE = re.compile(r"^\[\s*(?:/|end\s)|(?:/|完|结束|end)\s*\]$", re.I)
+_CLOSE_SHAPE = re.compile(rf"^{_L}\s*(?:/|end\s)|(?:/|完|结束|結束|end)\s*{_R}$", re.I)
 
 
 def _split_once(text: str) -> tuple[str, str]:

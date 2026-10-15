@@ -123,7 +123,7 @@ async def _read(deps, account: UUID, r: T.Reading, followup: int | None, now: da
     s = Settings.from_dict(await archive.get_settings(pool, who))
     lang = s.lang
     try:
-        route = await resolve_route(deps.keys, Scope(account, who, None))
+        route = await resolve_route(deps.keys, Scope(account, who, None), chore="tarot")
     except TrialOver:
         return "skipped"
     ask = ask_text(r, lang, followup)

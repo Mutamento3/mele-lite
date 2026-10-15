@@ -1,6 +1,6 @@
 """看图和画图（10-15 Aporia：让用户自己填 Gemini key 看图、填生图 key；Lite 本机那份是 ios/Lite/LocalMedia.swift）。
 
-Me →「看图和画图」从钥匙串里挑两把，存在 accounts.media（{vision_key, image_key, image_model}）：
+钥匙串里勾了看图 / 画图的钥匙（10-15 起存在 media.chores）；以前是 Me →「看图和画图」从钥匙串里挑两把，存在 accounts.media（{vision_key, image_key, image_model}）：
 - 看图：TA 聊天的模型看不见图时，照片先交给这把写描述（brain/vision._describer 先看它，再看钥匙串里第一把会看图的，再用我们的）。
 - 画图：挑了 TA 才有 draw 工具。Gemini 走 generateContent（图片模型），OpenAI / 兼容口走 /images/generations。
   画好的存成附件，跟它这一轮的话挂在一起；不限张数（用户自己的 key，想画多少画多少）。"""
@@ -17,6 +17,8 @@ from uuid import UUID
 import httpx
 
 from llm.router import Route
+
+from . import chores as CH
 
 log = logging.getLogger(__name__)
 
@@ -48,56 +50,59 @@ async def _key(pool, account: UUID, kid) -> dict | None:
 
 
 async def public(pool, account: UUID, now: datetime) -> dict:
-    m = await get(pool, account)
-    out = {}
-    for k in ("vision_key", "image_key"):
-        out[k] = m.get(k) if m.get(k) and await _key(pool, account, m[k]) else None
-    return {**out, "image_model": m.get("image_model") or "", "default_models": DEFAULT_MODELS,
+    t = await CH.get_table(pool, account)
+    live = await CH.live_keys(pool, account)
+    return {"vision_key": CH.pick(t["chores"], "vision", live), "image_key": CH.pick(t["chores"], "draw", live),
+            "image_model": t["draw_model"], "default_models": DEFAULT_MODELS,
             "drawn_today": await drawn_today(pool, account, now)}
 
 
 async def put(pool, account: UUID, body: dict) -> None:
-    """{vision_key?, image_key?, image_model?}；钥匙 null = 不挑。挑错家的报 ValueError（给人看的话）"""
-    m = await get(pool, account)
-    for k in ("vision_key", "image_key"):
+    """旧 App 的接口（10-15 起背后是分活表）：{vision_key?, image_key?, image_model?}"""
+    t = await CH.get_table(pool, account)
+    for k, chore in (("vision_key", "vision"), ("image_key", "draw")):
         if k not in body:
             continue
         if not body[k]:
-            m[k] = None
+            t["chores"].pop(chore, None)
             continue
         key = await _key(pool, account, body[k])
         if key is None:
             raise LookupError("没有这把钥匙")
-        if k == "vision_key" and key["provider"] not in SEEING:
-            raise ValueError("DeepSeek 看不见图，挑一把 Gemini / Claude / OpenAI 的")
-        if k == "image_key" and key["provider"] not in DEFAULT_MODELS:
-            raise ValueError("这家不会画图，挑一把 Gemini 或 OpenAI（兼容口）的")
-        m[k] = str(key["id"])
+        if chore not in CH.can(key["provider"]):
+            raise ValueError("DeepSeek 看不见图，挑一把 Gemini / Claude / OpenAI 的" if chore == "vision"
+                             else "这家不会画图，挑一把 Gemini 或 OpenAI（兼容口）的")
+        t["chores"][chore] = str(key["id"])
     if "image_model" in body:
-        m["image_model"] = str(body.get("image_model") or "").strip()[:100]
-    await pool.execute("UPDATE accounts SET media = $2::jsonb WHERE id = $1", account, json.dumps(m))
+        t["draw_model"] = str(body.get("image_model") or "").strip()[:100]
+    await CH.save_table(pool, account, t)
+
+
+async def _picked(pool, account: UUID, chore: str) -> dict | None:
+    t = await CH.get_table(pool, account)
+    kid = CH.pick(t["chores"], chore, await CH.live_keys(pool, account))
+    return await _key(pool, account, kid) if kid else None
 
 
 async def vision_route(pool, box, account: UUID) -> Route | None:
-    """挑过的看图钥匙；没挑 / 删了 = None（vision 再往下找）"""
+    """勾了「看图」的那把；没勾 / 删了 = None（vision 再往下找）"""
     if box is None:
         return None
-    m = await get(pool, account)
-    k = await _key(pool, account, m.get("vision_key")) if m.get("vision_key") else None
-    if k is None or k["provider"] not in SEEING:
+    k = await _picked(pool, account, "vision")
+    if k is None:
         return None
     return Route(k["provider"], box.unlock(k["secret"]), k["chat_model"], k["chat_model"], base_url=k["base_url"])
 
 
 async def image_route(pool, box, account: UUID) -> tuple[str, str, str, str | None] | None:
-    """(哪家, key, 模型, 地址)；没挑 = None"""
+    """(哪家, key, 模型, 地址)；没勾「画图」= None"""
     if box is None:
         return None
-    m = await get(pool, account)
-    k = await _key(pool, account, m.get("image_key")) if m.get("image_key") else None
-    if k is None or k["provider"] not in DEFAULT_MODELS:
+    k = await _picked(pool, account, "draw")
+    if k is None:
         return None
-    return k["provider"], box.unlock(k["secret"]), m.get("image_model") or DEFAULT_MODELS[k["provider"]], k["base_url"]
+    t = await CH.get_table(pool, account)
+    return k["provider"], box.unlock(k["secret"]), t["draw_model"] or DEFAULT_MODELS[k["provider"]], k["base_url"]
 
 
 async def drawn_today(pool, account: UUID, now: datetime) -> int:

@@ -8,7 +8,7 @@ import UIKit
 /// - 看图：TA 聊天的模型看不见图（DeepSeek、兼容口）时，TA 发的照片先交给这把写一段描述，描述跟着那句话进上下文、存在附件上，以后也记得；
 ///   没挑就用钥匙串里第一把会看图、同意过的。
 /// - 画图：挑了才有 draw 工具。Gemini 走 generateContent（图片模型），OpenAI / 兼容口走 /images/generations。不限张数（10-15 Aporia：用户自己的 key，想画多少画多少）。
-/// 设置存 media.json：{vision_key, image_key, image_model}
+/// 10-15 起挑哪把存在钥匙串分活表（LocalChores / chores.json）；media.json 只剩搬家时读一次
 enum LocalMedia {
     static let defaultModels = ["gemini": "gemini-2.5-flash-image", "openai": "gpt-image-1", "openai-compatible": "gpt-image-1"]
 
@@ -19,36 +19,36 @@ enum LocalMedia {
         switch r.method {
         case "GET": return .json(publicOut(host))
         case "PUT":
-            var m = settings(host.store)
-            let keys = host.keys
-            func kind(_ id: String) -> String? { keys.first { ($0["id"] as? String) == id }?["provider"] as? String }
-            for k in ["vision_key", "image_key"] where r.json.keys.contains(k) {
-                guard let id = r.json[k] as? String, !id.isEmpty else { m[k] = NSNull(); continue }
-                guard let p = kind(id) else { return .error(404, String(localized: "没有这把钥匙")) }
-                if k == "vision_key", p == "deepseek" { return .error(400, String(localized: "DeepSeek 看不见图，挑一把 Gemini / Claude / OpenAI 的")) }
-                if k == "image_key", defaultModels[p] == nil { return .error(400, String(localized: "这家不会画图，挑一把 Gemini 或 OpenAI（兼容口）的")) }
-                m[k] = id
+            var (t, dm) = LocalChores.table(host)
+            let live = LocalChores.live(host)
+            for (field, chore) in [("vision_key", "vision"), ("image_key", "draw")] where r.json.keys.contains(field) {
+                guard let id = r.json[field] as? String, !id.isEmpty else { t[chore] = nil; continue }
+                guard let p = live[id] else { return .error(404, String(localized: "没有这把钥匙")) }
+                guard Chores.can(p).contains(chore) else {
+                    return .error(400, chore == "vision" ? String(localized: "DeepSeek 看不见图，挑一把 Gemini / Claude / OpenAI 的")
+                                                         : String(localized: "这家不会画图，挑一把 Gemini 或 OpenAI（兼容口）的"))
+                }
+                t[chore] = id
             }
-            if let model = r.json["image_model"] as? String { m["image_model"] = model.trimmingCharacters(in: .whitespacesAndNewlines) }
-            host.store.write("media.json", m)
+            if let model = r.json["image_model"] as? String { dm = model.trimmingCharacters(in: .whitespacesAndNewlines) }
+            LocalChores.save(host, table: t, drawModel: dm)
             return .json(publicOut(host))
         default: return nil
         }
     }
 
     static func publicOut(_ host: LocalHost) -> [String: Any] {
-        let m = settings(host.store)
-        let ids = Set(host.keys.compactMap { $0["id"] as? String })
-        func live(_ k: String) -> Any { (m[k] as? String).flatMap { ids.contains($0) ? $0 : nil } ?? NSNull() }
-        return ["vision_key": live("vision_key"), "image_key": live("image_key"), "image_model": m["image_model"] as? String ?? "",
-                "default_models": defaultModels, "drawn_today": drawnToday(host.store)]
+        let (t, dm) = LocalChores.table(host)
+        let live = LocalChores.live(host)
+        return ["vision_key": Chores.pick(t, "vision", live: live) ?? NSNull(), "image_key": Chores.pick(t, "draw", live: live) ?? NSNull(),
+                "image_model": dm, "default_models": defaultModels, "drawn_today": drawnToday(host.store)]
     }
 
     // MARK: - 看图
 
     /// 看图用哪把：挑过的那把 → 钥匙串里第一把会看图、同意过的
     static func visionRoute(_ host: LocalHost) -> (ProviderConfig, String)? {
-        if let id = settings(host.store)["vision_key"] as? String, let r = host.route(key: id), r.0.seesImages { return r }
+        if let r = host.route(chore: "vision", else: nil), r.0.seesImages { return r }
         for k in host.keys {
             guard let id = k["id"] as? String, let r = host.route(key: id), r.0.seesImages,
                   !LiteConsent.book.needsAsk(r.0) else { continue }
@@ -94,10 +94,10 @@ enum LocalMedia {
     // MARK: - 画图
 
     static func imageRoute(_ host: LocalHost) -> (provider: String, key: String, model: String, base: String?)? {
-        let m = settings(host.store)
-        guard let id = m["image_key"] as? String, let k = host.keys.first(where: { ($0["id"] as? String) == id }),
+        let (t, dm) = LocalChores.table(host)
+        guard let id = Chores.pick(t, "draw", live: LocalChores.live(host)), let k = host.keys.first(where: { ($0["id"] as? String) == id }),
               let p = k["provider"] as? String, let fallback = defaultModels[p], let secret = host.vault.get(id) else { return nil }
-        let model = (m["image_model"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+        let model = dm.isEmpty ? fallback : dm
         return (p, secret, model, (k["base_url"] as? String).flatMap { $0.isEmpty ? nil : $0 })
     }
 

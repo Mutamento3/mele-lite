@@ -161,8 +161,7 @@ struct KeychainCard: View {
     @State private var keys: [KeyDTO] = []
     @State private var adding = false
     @State private var deleting: KeyDTO?
-    @State private var editing: KeyDTO?          // 改后台模型（10-13 内测）
-    @State private var ledgerDraft = ""
+    @State private var choosing: KeyDTO?         // 点开勾活（10-15）
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -188,18 +187,16 @@ struct KeychainCard: View {
                 HStack(spacing: 10) {
                     Image(systemName: "key.fill").font(Typo.icon(13)).foregroundStyle(theme.accentDeep)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(Self.providerName(k.provider)) · \(k.chatModel)").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                        Text(k.provider == "elevenlabs" ? Self.providerName(k.provider) : "\(Self.providerName(k.provider)) · \(k.chatModel)")
+                            .font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
                         Text("••••\(k.last4)").font(Typo.number(Typo.Size.caption, .regular)).foregroundStyle(theme.inkFaint)
-                        if !Lite.local, let lm = k.ledgerModel, !lm.isEmpty {
-                            Text("后台：\(lm)").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                        let tags = ChoreNames.tags(k.chores)
+                        if !tags.isEmpty {
+                            Text(tags.joined(separator: " · ")).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.accentDeep)
                         }
                     }
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard !Lite.local else { return }      // 本机模式换写账的模型走 TA 高级设定「回声用哪把钥匙」（echo_key_id）
-                        ledgerDraft = k.ledgerModel ?? ""
-                        editing = k
-                    }
+                    .onTapGesture { choosing = k }
                     Spacer()
                     Button { deleting = k } label: {
                         Image(systemName: "trash").font(Typo.icon(13)).foregroundStyle(theme.inkFaint)
@@ -211,7 +208,7 @@ struct KeychainCard: View {
                 Label("加一把钥匙", systemImage: "plus").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.accentDeep)
             }
             .buttonStyle(.plain)
-            Hint(text: String(localized: "用自己的 key，聊天不限量；钱直接付给模型那家。"))
+            Hint(text: String(localized: "用自己的 key，聊天不限量；钱直接付给模型那家。点一把钥匙勾它干哪些活。"))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,7 +216,7 @@ struct KeychainCard: View {
         .task { await load() }
         .sheet(isPresented: $adding) {
             AddKeyView { newKey in
-                Task { await model.useKeyWhereFree(newKey); await load() }
+                Task { if !newKey.isEmpty { await model.useKeyWhereFree(newKey) }; await load() }
             }
             .environmentObject(model).environmentObject(theme)
             .environment(\.colorScheme, .light)
@@ -231,19 +228,11 @@ struct KeychainCard: View {
                 deleting = nil
             }
         } message: { Text("用它的联系人会回到免费额度。") }
-        .alert("后台模型", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
-            TextField("比如 gpt-5-mini（可不填）", text: $ledgerDraft)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("存") {
-                if let k = editing {
-                    let v = ledgerDraft.trimmingCharacters(in: .whitespaces)
-                    Task { let _: KeyDTO? = try? await model.api.call("PATCH", "keys/\(k.id)", json: ["ledger_model": v]); await load() }
-                }
-                editing = nil
+        .sheet(item: $choosing) { k in
+            KeyChoresSheet(key: k, names: Dictionary(uniqueKeysWithValues: keys.map { ($0.id, Self.providerName($0.provider)) })) {
+                Task { await load() }
             }
-            Button("取消", role: .cancel) { editing = nil }
-        } message: {
-            Text("写账本、压旧天这些后台活用哪个模型（同一把 key 能用的）。不填：模型清单里有的用同一家便宜的，没有的就用聊天那个。")
+            .environmentObject(model).environmentObject(theme)
         }
     }
 
@@ -255,7 +244,7 @@ struct KeychainCard: View {
 
     static func providerName(_ p: String) -> String {
         ["deepseek": "DeepSeek", "anthropic": "Claude", "openai": "OpenAI", "gemini": "Gemini",
-         "openai-compatible": String(localized: "兼容 OpenAI")][p] ?? p
+         "openai-compatible": String(localized: "兼容 OpenAI"), "elevenlabs": "ElevenLabs"][p] ?? p
     }
 }
 
@@ -279,7 +268,6 @@ struct AddKeyView: View {
     @State private var baseURL = ""
     @State private var models: [ModelDTO] = []
     @State private var customModel = ""
-    @State private var ledgerModel = ""          // 后台模型（可不填，10-13 内测）
     @State private var trying = false
     @State private var error: String?
     @State private var fetched: [String] = []       // 兼容 OpenAI：从 /v1/models 拉到的模型
@@ -287,7 +275,7 @@ struct AddKeyView: View {
     @State private var fetching = false
     @State private var fetchNote: String?
 
-    private let providers = ["deepseek", "anthropic", "openai", "gemini", "openai-compatible"]
+    private let providers = ["deepseek", "anthropic", "openai", "gemini", "openai-compatible", "elevenlabs"]
 
     var body: some View {
         NavigationStack {
@@ -310,6 +298,7 @@ struct AddKeyView: View {
                     #endif
                 }
 
+                if provider != "elevenlabs" {      // ElevenLabs 只管声音，不选模型（10-15）
                 Section {
                     // 目录里的（带价钱）+ 从这家拉到的 + 手填的，都能多选：一个模型存一把钥匙（10-11 内测反馈）
                     ForEach(models) { m in
@@ -337,14 +326,6 @@ struct AddKeyView: View {
                          ? String(format: String(localized: "会存成 %d 把钥匙（同一个 key，各配一个模型），联系人那边各挑各的。"), pickedModels.count)
                          : String(localized: "可以多选：选几个就存几把钥匙（同一个 key，各配一个模型）。列表里没有的，拉一下或者手填。"))
                 }
-
-                if !Lite.local {
-                    Section {
-                        TextField("模型名（可不填）", text: $ledgerModel)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    } header: { Text("后台模型") } footer: {
-                        Text("写账本、压旧天这些后台活用哪个，填同一把 key 能用的便宜模型就好。不填：清单里有的用同一家便宜的，没有的就用聊天那个。之后点钥匙那行也能改。")
-                    }
                 }
 
                 if let error {
@@ -357,7 +338,8 @@ struct AddKeyView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     if trying { ProgressView() } else {
-                        Button("存") { Task { await save() } }.disabled(apiKey.count < 8 || pickedModels.isEmpty)
+                        Button("存") { Task { provider == "elevenlabs" ? await saveVoiceKey() : await save() } }
+                            .disabled(apiKey.count < 8 || (provider != "elevenlabs" && pickedModels.isEmpty))
                     }
                 }
             }
@@ -452,6 +434,17 @@ struct AddKeyView: View {
         }
     }
 
+    private func saveVoiceKey() async {
+        trying = true; defer { trying = false }
+        do {
+            _ = try await model.api.raw("POST", "keys/elevenlabs", json: ["api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines)])
+            onAdded("")
+            dismiss()
+        } catch {
+            self.error = (error as? APIError)?.message ?? String(localized: "key 没存上")
+        }
+    }
+
     private func save() async {
         trying = true
         defer { trying = false }
@@ -460,8 +453,6 @@ struct AddKeyView: View {
             var body: [String: Any] = ["provider": provider, "api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
                                        "chat_model": m]
             if provider == "openai-compatible" { body["base_url"] = baseURL.trimmingCharacters(in: .whitespaces) }
-            let lm = ledgerModel.trimmingCharacters(in: .whitespaces)
-            if !Lite.local, !lm.isEmpty { body["ledger_model"] = lm }
             do {
                 let k: KeyDTO = try await model.api.call("POST", "keys", json: body)
                 if first == nil { first = k.id }
@@ -664,106 +655,3 @@ extension Notification.Name {
 
 /// 看图和画图（10-15 Aporia）：从钥匙串里挑一把专门看图（TA 的模型看不见图时替它看），一把画图（挑了 TA 才有 draw）。
 /// 接口 GET / PUT me/media（Lite 本机 LocalMedia；Host routes_account）；旧 Host 没这个接口就不显示
-struct MediaKeysCard: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var theme: AppTheme
-    @State private var keys: [KeyDTO] = []
-    @State private var media: Media?
-    @State private var modelDraft = ""
-    @State private var error: String?
-
-    struct Media: Decodable {
-        var visionKey: String?
-        var imageKey: String?
-        var imageModel: String
-        var defaultModels: [String: String]
-        var drawnToday: Int
-        enum CodingKeys: String, CodingKey {
-            case visionKey = "vision_key", imageKey = "image_key", imageModel = "image_model", defaultModels = "default_models"
-            case drawnToday = "drawn_today"
-        }
-    }
-
-    private static let seeing: Set<String> = ["anthropic", "openai", "gemini", "openai-compatible"]
-    private static let drawing: Set<String> = ["gemini", "openai", "openai-compatible"]
-
-    var body: some View {
-        Group {
-            if let m = media {
-                VStack(alignment: .leading, spacing: 14) {
-                    CardTitle(text: String(localized: "看图和画图"))
-                    row(String(localized: "看图"), picked: m.visionKey, none: String(localized: "自动"),
-                        options: keys.filter { Self.seeing.contains($0.provider) }) { save(["vision_key": $0.map { $0 as Any } ?? NSNull()]) }
-                    Hint(text: String(localized: "TA 用的模型看不见图（DeepSeek 这类）时，你发的照片先给这把看、写一段描述递给 TA，以后翻旧账也记得。Gemini 的 key 便宜，先在上面钥匙串加一把。「自动」= 钥匙串里第一把会看图的。"))
-                    Divider().opacity(0.4)
-                    row(String(localized: "画图"), picked: m.imageKey, none: String(localized: "不画"),
-                        options: keys.filter { Self.drawing.contains($0.provider) }) { save(["image_key": $0.map { $0 as Any } ?? NSNull()]) }
-                    if let kid = m.imageKey, let k = keys.first(where: { $0.id == kid }) {
-                        HStack(spacing: 8) {
-                            Text("模型").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
-                            TextField(m.defaultModels[k.provider] ?? "", text: $modelDraft)
-                                .font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .onSubmit { save(["image_model": modelDraft]) }
-                            if modelDraft != m.imageModel {
-                                Button("存") { save(["image_model": modelDraft]) }
-                                    .font(Typo.sans(Typo.Size.callout, .medium)).foregroundStyle(theme.accentDeep)
-                            }
-                        }
-                        Text("今天画了 \(m.drawnToday) 张").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim)
-                    }
-                    Hint(text: String(localized: "挑了 TA 才会画图，画好的跟它的话一起发过来。每张都花这把 key 的钱。模型不填用默认的：Gemini 是 gemini-2.5-flash-image，OpenAI 是 gpt-image-1；中转站填它给的画图模型名。"))
-                    if let error { Text(error).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red) }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .cardSurface()
-            }
-        }
-        .task { await load() }
-        .onReceive(NotificationCenter.default.publisher(for: .meleKeysChanged)) { _ in Task { await load() } }
-    }
-
-    private func row(_ title: String, picked: String?, none: String, options: [KeyDTO], set: @escaping (String?) -> Void) -> some View {
-        HStack {
-            Text(title).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
-            Spacer()
-            Menu {
-                Button { set(nil) } label: { if picked == nil { Label(none, systemImage: "checkmark") } else { Text(none) } }
-                ForEach(options) { k in
-                    let name = "\(KeychainCard.providerName(k.provider)) · ••••\(k.last4)"
-                    Button { set(k.id) } label: { if picked == k.id { Label(name, systemImage: "checkmark") } else { Text(name) } }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(options.first { $0.id == picked }.map { "\(KeychainCard.providerName($0.provider)) · ••••\($0.last4)" } ?? none)
-                        .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.accentDeep)
-                    Image(systemName: "chevron.up.chevron.down").font(Typo.icon(11)).foregroundStyle(theme.accentDeep)
-                }
-            }
-        }
-    }
-
-    private func load() async {
-        keys = (try? await model.api.call("GET", "keys")) ?? keys
-        if let m: Media = try? await model.api.call("GET", "me/media") {
-            media = m
-            modelDraft = m.imageModel
-        }
-    }
-
-    private func save(_ body: [String: Any]) {
-        Task {
-            error = nil
-            do {
-                let m: Media = try await model.api.call("PUT", "me/media", json: body)
-                media = m
-                modelDraft = m.imageModel
-            } catch let e as APIError {
-                error = e.message
-            } catch {
-                self.error = String(localized: "没存上，过会儿再试")
-            }
-        }
-    }
-}

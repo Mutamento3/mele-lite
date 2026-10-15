@@ -208,16 +208,12 @@ enum LocalEcho {
         return (Array(msgs[..<start]), Array(msgs[start...]))
     }
 
-    /// 写账 / 压旧天用的模型：设定里选了单独的钥匙就先用它，打回了换聊天那把兜底；只有一把就给两次机会。不开思考。
-    static func models(_ host: LocalHost, _ comp: [String: Any]) -> [(ProviderConfig, String)] {
-        let settings = comp["settings"] as? [String: Any] ?? [:]
+    /// 写账 / 压旧天（chore = "ledger"）、读导入（"import"）用的模型：钥匙串里勾了这样活的那把先上，打回了换聊天那把兜底；
+    /// 只有一把就给两次机会。不开思考。
+    static func models(_ host: LocalHost, _ comp: [String: Any], chore: String = "ledger") -> [(ProviderConfig, String)] {
         guard let chat = host.route(for: comp), !LiteConsent.book.needsAsk(chat.0) else { return [] }
         var first = chat
-        if let kid = settings["echo_key_id"] as? String, !kid.isEmpty {
-            var alt = comp
-            alt["key_id"] = kid
-            if let r = host.route(for: alt), !LiteConsent.book.needsAsk(r.0) { first = r }
-        }
+        if let r = host.route(chore: chore, else: nil), !LiteConsent.book.needsAsk(r.0) { first = r }
         func plain(_ r: (ProviderConfig, String)) -> (ProviderConfig, String) {
             (ProviderConfig(kind: r.0.kind, baseURL: r.0.baseURL, model: r.0.model, thinking: false), r.1)
         }

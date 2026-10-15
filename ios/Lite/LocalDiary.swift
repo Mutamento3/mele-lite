@@ -37,7 +37,7 @@ enum LocalDiary {
         let s = host.store
         guard let cid = comp["id"] as? String else { return }
         let st = comp["settings"] as? [String: Any] ?? [:]
-        guard writes(st, main: main), let (provider, key) = host.route(for: comp),
+        guard writes(st, main: main), let (provider, key) = host.route(chore: "diary", else: host.route(for: comp)),
               !LiteConsent.book.needsAsk(provider) else { return }
         let day = dayString(yesterday)
         let all = s.collection("diary")

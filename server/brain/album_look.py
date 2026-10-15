@@ -79,7 +79,7 @@ async def look_batch(deps, account, companion, photos: list[A.Photo], now: datet
     s = Settings.from_dict(await archive.get_settings(pool, companion))
     scope = Scope(account, companion, None)
     try:
-        route = await resolve_route(deps.keys, scope)
+        route = await resolve_route(deps.keys, scope, chore="moments")
     except TrialOver:
         route = getattr(deps.keys, "trial", None)
         if route is None:

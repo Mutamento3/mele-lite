@@ -137,7 +137,7 @@ async def visit(deps, v, now: datetime) -> str:
     s = Settings.from_dict(await archive.get_settings(pool, comp))
     scope = Scope(acc, comp, None)
     try:
-        route = await resolve_route(deps.keys, scope)
+        route = await resolve_route(deps.keys, scope, chore="moments")
     except TrialOver:
         route = getattr(deps.keys, "trial", None)
         if route is None:

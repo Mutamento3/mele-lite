@@ -165,8 +165,23 @@ struct KeyDTO: Decodable, Identifiable, Hashable {
     let provider: String
     let chatModel: String
     let last4: String
-    var ledgerModel: String? = nil      // 后台模型（写账本、压旧天，10-13）；空 = 照清单
-    enum CodingKeys: String, CodingKey { case id, provider, last4; case chatModel = "chat_model"; case ledgerModel = "ledger_model" }
+    var ledgerModel: String? = nil      // Host 旧的后台模型（10-13）；10-15 起界面不显示，照旧生效
+    var chores: [String] = []           // 钥匙串分活（10-15）
+    var can: [String] = []
+    var drawModel: String = ""
+    enum CodingKeys: String, CodingKey {
+        case id, provider, last4, chores, can
+        case chatModel = "chat_model"; case ledgerModel = "ledger_model"; case drawModel = "draw_model"
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id); provider = try c.decode(String.self, forKey: .provider)
+        chatModel = try c.decodeIfPresent(String.self, forKey: .chatModel) ?? ""; last4 = try c.decode(String.self, forKey: .last4)
+        ledgerModel = try c.decodeIfPresent(String.self, forKey: .ledgerModel)
+        chores = try c.decodeIfPresent([String].self, forKey: .chores) ?? []
+        can = try c.decodeIfPresent([String].self, forKey: .can) ?? []
+        drawModel = try c.decodeIfPresent(String.self, forKey: .drawModel) ?? ""
+    }
 }
 
 struct TraitDTO: Decodable, Identifiable, Hashable {
@@ -701,7 +716,7 @@ struct CompanionSettingsView: View {
         Tile {
             RowPicker(selection: Binding(get: { store.keyID }, set: { v in Task { await store.useKey(v) } })) {
                 Text(Lite.on ? "还没选" : "免费额度").tag(String?.none)
-                ForEach(store.keys) { k in
+                ForEach(store.keys.filter { $0.provider != "elevenlabs" }) { k in
                     Text("\(k.chatModel) ··\(k.last4)").tag(String?.some(k.id))
                 }
             } label: { row("用哪把钥匙", "也就是用哪个模型。钥匙在「Me」里加") }

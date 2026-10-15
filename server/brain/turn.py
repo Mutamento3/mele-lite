@@ -25,7 +25,7 @@ import memory as M
 from llm.catalog import DEFAULT_HIGH_WATER, cost, lookup, sees_images
 from llm.errors import LLMError, context_full
 from llm.router import Route, call, make_adapter
-from llm.types import ChatRequest, ImagePart, Msg, ToolRound, Usage
+from llm.types import ChatRequest, ImagePart, Msg, ToolCall, ToolRound, Usage
 
 from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, media, probe as sentinel, reactions, tarot, vision, voice, wallet
 from .judge import LLMJudge
@@ -148,6 +148,23 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
         mono, said = monologue.split_monologue(reply.text)    # 手写独白：切下来当思考链；调工具前那一段也要切
         if mono:
             thinking.append(mono)
+        if not reply.tool_calls:
+            # 没走工具接口、把调用写成了文字（10-15 内测：<function_calls><invoke name="memory_recall">… 原样进了气泡）：
+            # 文字删掉；是它有的工具就替它调，结果贴在 TA 那句后面再叫一次（三家都能这么接，不用伪造工具来回）
+            found, said = model_noise.text_tool_calls(said)
+            known = {t.name for t in req.tools}
+            found = [(n, a) for n, a in found if n in known]
+            if found and round_no < max_rounds:
+                lines = []
+                for i, (name, args) in enumerate(found):
+                    c = ToolCall(f"text_call_{round_no}_{i}", name, args)
+                    r = await run_tool(ctx, c)
+                    lines.append(f"{name} → {r}")
+                    used.append(name)
+                    notes.append(tool_note(name, args, r, lang))
+                last = req.messages[-1]
+                req.messages[-1] = replace(last, text=f"{last.text}\n\n{TEXT_CALL_NOTE[lang].format(chr(10).join(lines))}")
+                continue
         if not reply.tool_calls and mono and not said and not retried and round_no < max_rounds:
             # 09-27 深夜：它写了一小段独白就停了，正文空的。补一句提醒再叫一次；第一次那段独白不留（第二次会重写）
             retried = True
@@ -184,6 +201,9 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
 MONO_ONLY_NOTE = {"zh": "（你刚才只写了独白就停了，没写正文。独白照常写，写完一定接着写正文。）",
                   "en": "(Last time you wrote only the monologue and stopped. Write the monologue as usual, then always go on to the reply.)"}
 
+TEXT_CALL_NOTE = {"zh": "（你刚才把工具调用写成了文字，替你调了：\n{}\n以后直接用工具，别写进回复里。现在接着回话。）",
+                  "en": "(You wrote a tool call as text; it was run for you:\n{}\nUse the tools directly next time instead of writing them into the reply. Now go on with your reply.)"}
+
 TOOLS_HEAD = {"zh": "〔上一轮你用过：{}〕", "en": "〔Last turn you used: {}〕"}
 
 
@@ -211,8 +231,13 @@ def with_tools_note(note: str, text: str) -> str:
     return f"{note}\n{text}" if note else text
 
 
-async def resolve_route(keys, scope: Scope) -> Route:
-    """这一轮走哪把钥匙：正式的钥匙串按联系人找（DbKeys.route_for_scope，可能是试用钥匙）；本机测试的 FileKeys 按账号。"""
+async def resolve_route(keys, scope: Scope, chore: str | None = None) -> Route:
+    """这一轮走哪把钥匙：正式的钥匙串按联系人找（DbKeys.route_for_scope，可能是试用钥匙）；本机测试的 FileKeys 按账号。
+    chore = 后台哪样活（10-15 钥匙串分活）：勾了钥匙就用那把，没勾照旧。"""
+    if chore:
+        f = getattr(keys, "route_for_chore", None)
+        if f is not None and (picked := await f(scope, chore)) is not None:
+            return picked
     f = getattr(keys, "route_for_scope", None)
     r = f(scope) if f else keys.route_for(scope.account)
     return await r if inspect.isawaitable(r) else r
@@ -396,6 +421,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         await emit({"type": "error", "kind": "trial_over", "message": USER_ERRORS[lang]["trial_over"]})
         await emit({"type": "done"})
         return TurnOutcome(False, error="trial_over")
+    small = await _safe(resolve_route(deps.keys, scope, chore="dedupe"), route)    # 小判断（哨兵、细读）用的钥匙（10-15）
     adapter = get_adapter(deps, route)
     # 免费额度按这一轮真花的钱扣（连同哨兵、判读、看图、卷账本）：开始前记下今天的总花费，结束时算差
     trial_mark = (await archive.usage_on(pool, acc, day))["cost_usd"] if route.trial and not free_trial else None
@@ -417,12 +443,12 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     last_assistant = next((m.text for m in reversed(history) if m.role == "assistant"), "")
 
     names = (persona.name, persona.call_user, settings.user_name)   # 称呼不进关键词榜：它的名字、它怎么叫 TA、TA 的名字（09-28 召回改造第 1 步）
-    heard = await _probe(deps, scope, route, settings, persona, history, text, day, now) \
+    heard = await _probe(deps, scope, small, settings, persona, history, text, day, now) \
         if deps.sentinel and settings.recall_probe and settings.recall_level != "off" and not scope.incognito else None
     # 细读：正式接口用大模型判读器判灰区（09-28 评测 medium 对13/错0/漏3，本地精排反而净亏）；没有真模型的测试里用本地精排
     judge = None
     if settings.careful_read and not scope.incognito:
-        judge = LLMJudge(get_adapter(deps, route), route.ledger_model or route.chat_model,
+        judge = LLMJudge(get_adapter(deps, small), small.ledger_model or small.chat_model,
                          _recent_lines(settings, persona, history), settings.lang) if deps.sentinel else deps.reranker
     # 一潮之内同一条记忆只想起一次（09-27 Aporia定：按潮不按钟点，有的潮不到六小时）；卷账本时清空
     seen = {int(k) for k in (state.get("recall_seen") or [])}
@@ -433,7 +459,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         in_context_since=history[0].created_at if history else None, now=now,
         reranker=judge, rng=deps.rng, names=names, probe=heard), None)
     if isinstance(judge, LLMJudge) and judge.usage is not None:
-        jm = route.ledger_model or route.chat_model
+        jm = small.ledger_model or small.chat_model
         await _safe(archive.add_usage(pool, acc, day, jm, judge.usage, cost(judge.usage, jm)), None)
     if recall is not None:
         seen.update([m.id for m in recall.full] + [l.memory_id for l in recall.lines]
@@ -732,9 +758,14 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
         except LLMError as e:
             log.warning("pre-roll memory pick failed: %s", e)
 
-    # 每种短活两条腿：先用便宜的，打回了换主聊天模型兜底；只有一个模型就给它两次机会（照之前自用的 App）
-    def legs(first: str) -> list[str]:
-        return [first, route.chat_model if first != route.chat_model else first]
+    # 每种短活两条腿：先用便宜的，打回了换主聊天模型兜底；只有一个模型就给它两次机会（照之前自用的 App）。
+    # 钥匙串里勾了「写账本」的那把（10-15）当第一条腿，聊天那把兜底
+    picked = await _safe(resolve_route(deps.keys, scope, chore="ledger"), None)
+    mine = picked is not None and (picked.provider, picked.api_key) != (route.provider, route.api_key)
+
+    def legs(first: str) -> list:
+        back = route.chat_model if first != route.chat_model else first
+        return [(get_adapter(deps, picked), picked.chat_model), back] if mine and not settings.ledger_same_as_chat else [first, back]
     write_legs = legs(route.chat_model if settings.ledger_same_as_chat else route.ledger_model)
     age_legs = legs(route.chat_model if settings.ledger_same_as_chat else (route.age_model or route.ledger_model))
     name = Persona.from_dict(await archive.get_persona(pool, scope.companion), lang).name

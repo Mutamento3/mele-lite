@@ -214,7 +214,7 @@ async def caption_pending(deps, account: UUID, now: datetime, *, limit: int = 20
     s = Settings.from_dict(await archive.get_settings(pool, comps[0]))
     scope = Scope(account, comps[0], None)
     try:
-        chat = await resolve_route(deps.keys, scope)
+        chat = await resolve_route(deps.keys, scope, chore="caption")
     except TrialOver:
         chat = getattr(deps.keys, "trial", None)
     route = None

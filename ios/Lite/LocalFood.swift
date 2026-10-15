@@ -216,7 +216,7 @@ enum LocalFood {
         Task.detached {
             let s = host.store
             guard let comp = s.companions.first(where: { c in host.route(for: c).map { !LiteConsent.book.needsAsk($0.0) } ?? false }),
-                  let (provider, key) = host.quietRoute(for: comp),
+                  let (provider, key) = host.route(chore: "food", else: host.quietRoute(for: comp)),
                   let e = s.collection("food").first(where: { ($0["id"] as? Int) == id }) else { return }
             let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
             let ex = (e["meal"] as? String) == exercise

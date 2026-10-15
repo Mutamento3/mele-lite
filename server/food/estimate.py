@@ -97,7 +97,7 @@ async def run(deps, account: UUID, entry_id: int) -> None:
     if scope is None:
         return
     try:
-        route = await resolve_route(deps.keys, scope)
+        route = await resolve_route(deps.keys, scope, chore="food")
     except TrialOver:
         await _write(pool, account, entry_id, status="pending", note=NOTE[lang]["trial"])
         return

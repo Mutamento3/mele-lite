@@ -180,7 +180,7 @@ async def write_day(deps, account, companion, day: date, now: datetime) -> str:
                                "AND NOT incognito ORDER BY last_at DESC LIMIT 1", companion, account) \
         or await accounts.new_conversation(pool, account, companion)
     try:
-        route = await resolve_route(deps.keys, Scope(account, companion, conv))
+        route = await resolve_route(deps.keys, Scope(account, companion, conv), chore="diary")
     except TrialOver:                                # 免费用户的日记不扣免费额度（Aporia 10-01）：额度用完了也照写
         route = getattr(deps.keys, "trial", None)
         if route is None:

@@ -30,7 +30,7 @@ async def judge(deps: Deps, account: UUID, companion: UUID, gid: UUID, gname: st
     settings = Settings.from_dict(await archive.get_settings(pool, companion))
     lang = settings.lang
     try:
-        route = await resolve_route(deps.keys, Scope(account, companion, gid))
+        route = await resolve_route(deps.keys, Scope(account, companion, gid), chore="dedupe")
     except Exception:                     # 没钥匙、试用用完：这次不说
         return False
     persona = Persona.from_dict(await archive.get_persona(pool, companion), lang)

@@ -26,8 +26,9 @@ final class LocalHost: @unchecked Sendable {
         case ("POST", 2) where p == ["me", "devices"], ("POST", 2) where p == ["me", "active"]: return .empty
         case ("PUT", 3) where p[0] == "me" && p[1] == "context": return LocalContext.save(store, kind: p[2], body: r.json)   // 天气 / 在哪 / 日程 / 步数：存本机，聊天时拼〔TA 那边〕
         // ── 钥匙 ──
-        case ("GET", 1) where p[0] == "keys": return .json(keys)
+        case ("GET", 1) where p[0] == "keys": return .json(LocalChores.keysOut(self))
         case ("POST", 1) where p[0] == "keys": return addKey(r.json)
+        case ("PATCH", 2) where p[0] == "keys": return LocalChores.patch(self, key: p[1], r.json)
         case ("DELETE", 2) where p[0] == "keys": return deleteKey(p[1])
         case ("GET", 1) where p[0] == "models": return .json(Self.catalog.filter { r.query["provider"] == nil || ($0["provider"] as? String) == r.query["provider"] })
         case ("GET", 1) where p[0] == "traits": return .json([String]())
@@ -158,6 +159,10 @@ final class LocalHost: @unchecked Sendable {
     }
 
     private func deleteKey(_ id: String) -> LocalResponse {
+        if id == LocalVoice.keyID, LocalVoice.key(self) != nil {
+            vault.set(nil, for: id)
+            return .empty
+        }
         guard keys.contains(where: { ($0["id"] as? String) == id }) else { return .error(404, String(localized: "没有这把钥匙")) }
         store.write("keys.json", keys.filter { ($0["id"] as? String) != id })
         vault.set(nil, for: id)

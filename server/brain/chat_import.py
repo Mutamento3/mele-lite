@@ -291,7 +291,7 @@ async def pick(deps, acc: UUID, cid: UUID) -> None:
     name = Persona.from_dict(await archive.get_persona(pool, cid), s.lang).name
     user = (await accounts.get_profile(pool, acc))["name"] or s.user_name
     try:
-        route = await resolve_route(deps.keys, Scope(acc, cid, None))
+        route = await resolve_route(deps.keys, Scope(acc, cid, None), chore="import")
     except Exception:
         job.update(state="failed", error="还没给 TA 配 key")
         return await _save(pool, cid, job, deps.now())

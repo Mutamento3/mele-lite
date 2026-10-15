@@ -18,7 +18,6 @@ struct MeView: View {
                     .padding(.top, 8)
                 ProfileCard()
                 KeychainCard()
-                if Lite.on { MediaKeysCard() }      // 看图和画图（10-15）
                 if Lite.on { HostCard() }
                 if Lite.on { MCPServersCard() }       // 连着 Host 也能接（10-05，服务器 brain/mcp.py）
                 if Lite.on { UsageCard() }          // 连着 Host 读 Host 的 GET usage（10-15），形状跟本机一样

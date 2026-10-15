@@ -240,6 +240,20 @@ class DbKeys:
             raise TrialOver()
         return self.trial
 
+    async def route_for_chore(self, scope, chore: str) -> Route | None:
+        """钥匙串里勾了这样活的那把（10-15）；没勾 / 删了 / 那家干不了 = None（照旧走聊天那把）"""
+        from . import chores as CH
+        t = await CH.get_table(self.pool, scope.account)
+        kid = CH.pick(t["chores"], chore, await CH.live_keys(self.pool, scope.account))
+        if kid is None:
+            return None
+        row = await self.pool.fetchrow("SELECT * FROM keyring WHERE id = $1 AND account_id = $2", UUID(kid), scope.account)
+        if row is None:
+            return None
+        m = row["chat_model"]
+        return Route(provider=row["provider"], api_key=self.box.unlock(row["secret"]), chat_model=m,
+                     ledger_model=m, base_url=row["base_url"], age_model=m)
+
 
 class TrialOver(Exception):
     pass

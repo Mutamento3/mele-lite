@@ -252,7 +252,7 @@ async def focus_start(conv: UUID, body: dict = Body(...), acc: UUID = Depends(ac
     if not 5 <= minutes <= 600:
         raise HTTPException(400, "专注时长要在 5 到 600 分钟之间")
     try:
-        route = await resolve_route(a.deps.keys, scope)
+        route = await resolve_route(a.deps.keys, scope, chore="focus")
     except TrialOver:
         route = None
     s = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))

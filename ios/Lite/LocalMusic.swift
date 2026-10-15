@@ -425,7 +425,7 @@ enum LocalMusic {
 
     /// 它那个联系人：第一个（服务器也是给账号第一个联系人开推歌的钟）
     private static func mainCompanion(_ host: LocalHost) -> ([String: Any], ProviderConfig, String)? {
-        guard let c = host.store.companions.first, let (p, k) = host.route(for: c), !LiteConsent.book.needsAsk(p) else { return nil }
+        guard let c = host.store.companions.first, let (p, k) = host.route(chore: "music", else: host.route(for: c)), !LiteConsent.book.needsAsk(p) else { return nil }
         return (c, p, k)
     }
 

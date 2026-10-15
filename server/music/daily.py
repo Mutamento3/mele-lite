@@ -77,7 +77,7 @@ async def _ask_names(deps, scope: Scope, prompt: str, day: date) -> list[str]:
     """请它那把钥匙的便宜模型报一串歌手名（只要名字，歌由曲库验）。额度用完 / 出错 = []。"""
     from brain.turn import get_adapter, resolve_route
     try:
-        route = await resolve_route(deps.keys, scope)
+        route = await resolve_route(deps.keys, scope, chore="music")
     except TrialOver:
         return []
     model = route.ledger_model or route.chat_model

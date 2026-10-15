@@ -142,7 +142,7 @@ enum LocalRooms2 {
             }
             // 看图钥匙（10-15，Me「看图和画图」挑的那把）优先；没挑就是钥匙串里第一把会看图、同意过的，再没有才看联系人的
             let comp = s.companions.first(where: { c in host.route(for: c).map { !LiteConsent.book.needsAsk($0.0) } ?? false }) ?? s.companions.first
-            guard let comp, let (provider, key) = LocalMedia.visionRoute(host)
+            guard let comp, let (provider, key) = host.route(chore: "caption", else: nil).flatMap({ $0.0.seesImages ? $0 : nil }) ?? LocalMedia.visionRoute(host)
                     ?? host.quietRoute(for: comp).flatMap({ $0.0.seesImages && !LiteConsent.book.needsAsk($0.0) ? $0 : nil }) else { return }
             var failures = 0
             let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"

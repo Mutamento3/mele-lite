@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
-from brain import accounts, archive, auth, avatars, context_line, media
+from brain import accounts, archive, auth, avatars, chores as CH, context_line, media
 
 from .deps import Api, account, api, bearer
 
@@ -141,14 +141,20 @@ async def put_media(body: dict = Body(...), acc: UUID = Depends(account), a: Api
 
 # ── 钥匙串 ──
 
-def _key(k: auth.KeyInfo) -> dict:
+def _key(k: auth.KeyInfo, table: dict | None = None) -> dict:
+    t = (table or {}).get("chores", {})
+    mine = [c for c in CH.CHORES if t.get(c) == str(k.id)]
+    if k.provider == "elevenlabs":
+        mine = ["voice"]                                   # 一个账号只有一把 ElevenLabs，声音就是它
     return {"id": str(k.id), "provider": k.provider, "chat_model": k.chat_model, "base_url": k.base_url,
-            "last4": k.last4, "ledger_model": k.ledger_model}
+            "last4": k.last4, "ledger_model": k.ledger_model, "chores": mine, "can": CH.can(k.provider),
+            "draw_model": (table or {}).get("draw_model", "") if "draw" in mine else ""}
 
 
 @router.get("/keys")
 async def list_keys(acc: UUID = Depends(account), a: Api = Depends(api)):
-    return [_key(k) for k in await auth.list_keys(a.deps.pool, acc)]
+    table = await CH.get_table(a.deps.pool, acc)
+    return [_key(k, table) for k in await auth.list_keys(a.deps.pool, acc)]
 
 
 @router.post("/keys", status_code=201)
@@ -167,15 +173,30 @@ async def add_key(body: dict = Body(...), acc: UUID = Depends(account), a: Api =
                                  ledger_model=str(body.get("ledger_model") or ""))
     except auth.AuthError as e:
         raise _bad(e) from e
-    return next(_key(k) for k in await auth.list_keys(a.deps.pool, acc) if k.id == kid)
+    table = await CH.get_table(a.deps.pool, acc)
+    return next(_key(k, table) for k in await auth.list_keys(a.deps.pool, acc) if k.id == kid)
 
 
 @router.patch("/keys/{key_id}")
 async def patch_key(key_id: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
-    """现在只改后台模型（ledger_model，空 = 照清单）。"""
-    if not await auth.set_ledger_model(a.deps.pool, acc, key_id, str(body.get("ledger_model") or "")):
+    """改活（chores / draw_model，10-15）；旧 App 还会发 ledger_model。"""
+    pool = a.deps.pool
+    k = next((x for x in await auth.list_keys(pool, acc) if x.id == key_id), None)
+    if k is None:
         raise HTTPException(404, "没有这把钥匙")
-    return next(_key(k) for k in await auth.list_keys(a.deps.pool, acc) if k.id == key_id)
+    if "ledger_model" in body:
+        await auth.set_ledger_model(pool, acc, key_id, str(body.get("ledger_model") or ""))
+    table, moved = await CH.get_table(pool, acc), []
+    if "chores" in body and k.provider != "elevenlabs":
+        try:
+            table["chores"], moved = CH.assign(table["chores"], str(key_id), k.provider, [str(c) for c in body["chores"] or []])
+        except ValueError as e:
+            raise _bad(e) from e
+    if "draw_model" in body:
+        table["draw_model"] = str(body.get("draw_model") or "").strip()[:100]
+    await CH.save_table(pool, acc, table)
+    k = next(x for x in await auth.list_keys(pool, acc) if x.id == key_id)
+    return {**_key(k, table), "moved": moved}
 
 
 @router.delete("/keys/{key_id}", status_code=204)

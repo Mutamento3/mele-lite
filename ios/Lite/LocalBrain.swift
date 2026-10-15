@@ -637,12 +637,13 @@ final class LocalBrain: @unchecked Sendable {
         var gaugeNoted = false
         var retriedEmpty = false, retriedNoMono = false, usedTools = false
         // 记新记忆前问一句「是不是跟旧的同一件事」（10-12）：用同一把 key，不想事、只回编号
-        let judge: (String) async -> String? = { [provider, key] prompt in
-            var p = provider
+        let small = host.route(chore: "dedupe", else: (provider, key)) ?? (provider, key)   // 小判断用勾的钥匙（10-15）
+        let judge: (String) async -> String? = { [small] prompt in
+            var p = small.0
             p.thinking = false
             var out = ""
             do {
-                for try await e in makeClient(p, key: key).stream(ChatRequest(system: "You compare memories and reply with a number or none.", turns: [ChatTurn(role: .user, text: prompt)], maxTokens: 20)) {
+                for try await e in makeClient(p, key: small.1).stream(ChatRequest(system: "You compare memories and reply with a number or none.", turns: [ChatTurn(role: .user, text: prompt)], maxTokens: 20)) {
                     if case .text(let t) = e { out += t }
                 }
             } catch { return nil }
@@ -662,6 +663,20 @@ final class LocalBrain: @unchecked Sendable {
                     }
                 }
                 if let p = req.assistantPrefix, !said.isEmpty { said = p + said }      // 补叫时替它填好的开头，接回去
+                // 没走工具接口、把调用写成了文字（10-15 内测：<function_calls><invoke name="memory_recall">… 原样进了气泡）：
+                // 文字删掉；是它有的工具就替它真调一次，跟正常调用一样把结果还回去
+                if calls.isEmpty {
+                    let (found, rest) = ModelNoise.textToolCalls(said)
+                    if rest != said {
+                        said = rest
+                        let known = Set(req.tools.map(\.name))
+                        calls = found.enumerated().filter { known.contains($0.element.name) }.map {
+                            ToolCall(id: "text_call_\(UUID().uuidString.prefix(8))_\($0.offset)", name: $0.element.name, argumentsJSON: $0.element.argumentsJSON)
+                        }
+                        if !calls.isEmpty, provider.kind != .openai { raw = nil }   // Claude / Gemini 的原样内容里没有这次调用，带上会对不上
+                        NSLog("[tools] 文字写的调用 \(found.map(\.name))，替它调了 \(calls.map(\.name))")
+                    }
+                }
                 if !said.isEmpty { text += (text.isEmpty ? "" : "\n\n") + said }
                 if calls.isEmpty, group == nil, !retriedEmpty,
                    InnerVoice.split(Monologue.split(ModelNoise.strip(text)).body).body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -831,7 +846,7 @@ final class LocalBrain: @unchecked Sendable {
             defer { lock.withLock { writingLetters = false } }
             let s = host.store
             for comp in s.companions {
-                guard let cid = comp["id"] as? String, let (provider, key) = host.route(for: comp),
+                guard let cid = comp["id"] as? String, let (provider, key) = host.route(chore: "diary", else: host.route(for: comp)),   // 留信跟日记一样是 TA 亲笔（10-15）
                       !LiteConsent.book.needsAsk(provider) else { continue }
                 let convs = s.conversations.filter { ($0["companion_id"] as? String) == cid && LocalHost.isMainWindow($0) }
                     .sorted { LocalStore.date($0["last_at"]) > LocalStore.date($1["last_at"]) }
