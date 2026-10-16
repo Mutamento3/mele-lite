@@ -191,3 +191,38 @@ async def test_new_style_refused_falls_back_to_sse():
     c.link.close()
     await queue.put(None)
     assert mcp.is_legacy_url("https://x.example/SSE/") and not mcp.is_legacy_url("https://x.example/mcp")
+
+
+def test_explain_says_why_10_16():
+    """「试一下」没通说清楚为什么：Host 在 Docker 里，localhost 是它自己"""
+    from brain.mcp import MCPError, explain
+    assert explain(MCPError("unauthorized"), "http://localhost:8765/mcp").startswith("钥匙不对")
+    assert "172.17.0.1" in explain(MCPError("offline", "Connection refused"), "http://localhost:8765/mcp")
+    assert "172.17.0.1" in explain(MCPError("timeout"), "http://127.0.0.1:8765/mcp")
+    assert "/mcp" in explain(MCPError("http", "404"), "https://mem.example/")
+    assert "Connection refused" in explain(MCPError("offline", "Connection refused"), "https://mem.example/mcp")
+    assert "防火墙" in explain(MCPError("timeout"), "https://mem.example/mcp")
+
+
+async def test_link_bundled_memory_10_16(pool):
+    """mele-host memory on：接上 Host 自带的记忆库，给所有 TA 勾上；再跑一次只换钥匙不重复；断开连勾一起清"""
+    from datetime import datetime, timezone
+    from brain import mcp, accounts, archive
+    from test_api import Env
+    e = Env(pool)
+    t = await e.login()
+    async with e.client(t) as c:
+        await e.first_window(c)
+    acc = await pool.fetchval("SELECT id FROM accounts LIMIT 1")
+    box = e.deps.keys.box
+    now = datetime.now(timezone.utc)
+    sv, ticked = await mcp.link_bundled_memory(pool, box, acc, "tok-1111", now=now)
+    assert sv.url == "http://memory:8765/mcp" and sv.token == "tok-1111" and ticked >= 1
+    sv2, ticked2 = await mcp.link_bundled_memory(pool, box, acc, "tok-2222", now=now)
+    assert sv2.id == sv.id and sv2.token == "tok-2222" and ticked2 == 0
+    assert len(await mcp.servers(pool, box, acc)) == 1
+    cid = (await accounts.list_companions(pool, acc))[0]
+    assert str(sv.id) in (await archive.get_settings(pool, cid))["mcp_servers"]
+    assert await mcp.unlink_bundled_memory(pool, acc) is True
+    assert await mcp.servers(pool, box, acc) == [] and str(sv.id) not in ((await archive.get_settings(pool, cid)).get("mcp_servers") or [])
+    assert await mcp.unlink_bundled_memory(pool, acc) is False

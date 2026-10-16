@@ -30,6 +30,26 @@ services:
     volumes:
       - data:/data
 
+  # 记忆库（10-16，可选）：`mele-host memory on` 才起（.env 里 COMPOSE_PROFILES=memory）。跟 Host 共用 db（库名 mele_memory）
+  # 和 Host 已经下好的 bge-m3（挂 Host 的 data 卷，HF_HOME 指过去），不对外开端口——只有 Host 在 http://memory:8765/mcp 连它
+  memory:
+    image: ${MELE_MEMORY_IMAGE:-ghcr.io/aporia-and-poros/mele-memory:latest}
+    profiles: ["memory"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MEMORY_DSN: postgresql://mele:${DB_PASSWORD}@db:5432/mele_memory
+      MELE_MEMORY_TOKEN: ${MELE_MEMORY_TOKEN:-}
+      MELE_MEMORY_DATA: /memory
+      MELE_MEMORY_TZ: ${MELE_MEMORY_TZ:-UTC}
+      MELE_MEMORY_USER_NAME: ${MELE_MEMORY_USER_NAME:-}
+      HF_HOME: /hostdata/hf
+    volumes:
+      - memory:/memory
+      - data:/hostdata
+
   caddy:
     image: caddy:2
     restart: unless-stopped
@@ -47,3 +67,4 @@ volumes:
   db:
   data:
   caddy:
+  memory:

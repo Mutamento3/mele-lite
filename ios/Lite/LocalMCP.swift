@@ -245,10 +245,8 @@ final class LocalMCP: @unchecked Sendable {
             do {
                 let t = try await m.tools(sv, fresh: true)
                 return .json(["ok": true, "tools": t.map(\.name), "memory": m.isMemory(t)])
-            } catch MCPError.unauthorized {
-                return .json(["ok": false, "detail": String(localized: "钥匙不对")])
             } catch {
-                return .json(["ok": false, "detail": String(localized: "连不上，看看地址对不对、服务开着没")])
+                return .json(["ok": false, "detail": MCPExplain.text(error, url: sv.url)])   // 说清楚为什么（10-16）
             }
         case ("GET", 4) where p[3] == "web":
             // 记忆库软件 / 星图小组件用：网页地址 + 钥匙（只在手机里转一手，不出手机）

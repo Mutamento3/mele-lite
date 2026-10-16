@@ -14,6 +14,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import httpx
@@ -357,6 +358,31 @@ class Server:
                 "status": _health.get(self.id), "memory": is_memory(_tools[self.id][1]) if self.id in _tools else False}
 
 
+_LOOPBACK = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def explain(e: "MCPError", url: str) -> str:
+    """「试一下」没通时说清楚为什么（10-16 内测：只说「连不上」，其实是填了 localhost——Host 在 Docker 里，localhost 是它自己）。
+    跟 MeleLiteCore MCPExplain 同一套话，Lite 那份说的是「这台手机」"""
+    if e.kind == "unauthorized":
+        return "钥匙不对"
+    host = (urlparse(url).hostname or "").lower()
+    if host in _LOOPBACK:
+        return ("Host 跑在 Docker 里，地址里的 localhost / 127.0.0.1 指的是 Host 自己，不是你的服务器。"
+                "记忆库跟 Host 在同一台服务器上的话：记忆库那边 .env 加一行 MELE_MEMORY_BIND=172.17.0.1，"
+                "在记忆库目录 docker compose up -d 重启它，这里地址填 http://172.17.0.1:8765/mcp。"
+                "记忆库在别的机器上，就填那台机器的地址")
+    if e.kind == "timeout":
+        return "等了很久没回：地址打得开吗？服务器的防火墙放行这个端口没有"
+    if e.kind == "offline":
+        return f"连不上这个地址（{(e.detail or '')[:80]}）：看看地址、端口对不对，服务开着没"
+    if e.kind == "http" and e.detail in ("404", "405"):
+        return "地址通了，但那里不是 MCP：结尾一般是 /mcp（老式的是 /sse）"
+    if e.kind == "http":
+        return f"对方回了 {e.detail}，服务那边出了问题，看看它的日志"
+    return f"连上了但对不上话（{(e.detail or '')[:80]}）：确认填的是 MCP 地址，不是网页地址"
+
+
 def valid_url(url: str) -> bool:
     return bool(re.match(r"^https?://[^\s/]+", url or ""))
 
@@ -412,6 +438,37 @@ async def delete(pool, acc: UUID, sid: UUID) -> bool:
             s["mcp_servers"] = [x for x in s["mcp_servers"] if x != str(sid)]
             await archive.save_settings(pool, cid, s)
     return True
+
+
+# ── Host 自带的记忆库（10-16，`mele-host memory on`）：docker compose 里的 memory 服务，只在内网 ──
+BUNDLED_MEMORY_URL = "http://memory:8765/mcp"
+BUNDLED_MEMORY_NAME = "记忆库"
+
+
+async def link_bundled_memory(pool, box, acc: UUID, token: str, *, now: datetime) -> tuple[Server, int]:
+    """接上 Host 自带的记忆库：没接过就加一个（接过就换钥匙），并给这个账号所有 TA 勾上。可以反复跑。
+    返回 (服务, 新勾上的 TA 数)"""
+    from . import accounts, archive
+    row = await pool.fetchrow("SELECT id FROM mcp_servers WHERE account_id = $1 AND url = $2", acc, BUNDLED_MEMORY_URL)
+    if row is None:
+        sv = await add(pool, box, acc, BUNDLED_MEMORY_NAME, BUNDLED_MEMORY_URL, token, now=now)
+    else:
+        await update(pool, box, acc, row["id"], {"token": token})
+        sv = next(x for x in await servers(pool, box, acc) if x.id == row["id"])
+    ticked = 0
+    for cid in await accounts.list_companions(pool, acc):
+        st = await archive.get_settings(pool, cid)
+        mine = list(st.get("mcp_servers") or [])
+        if str(sv.id) not in mine and len(mine) < 20:
+            st["mcp_servers"] = mine + [str(sv.id)]
+            await archive.save_settings(pool, cid, st)
+            ticked += 1
+    return sv, ticked
+
+
+async def unlink_bundled_memory(pool, acc: UUID) -> bool:
+    sid = await pool.fetchval("SELECT id FROM mcp_servers WHERE account_id = $1 AND url = $2", acc, BUNDLED_MEMORY_URL)
+    return sid is not None and await delete(pool, acc, sid)
 
 
 def _drop_client(c: "Client | None") -> None:

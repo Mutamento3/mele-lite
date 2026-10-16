@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Mele Host 管理命令（10-04），装在 /usr/local/bin。
+# 整个包进 main、最后才调用（10-16）：update 会把这个文件自己换掉，bash 是边跑边读的，不包起来换完会接着读新文件的半截
 set -euo pipefail
-cd /opt/mele-host
+
+main() {
+cd "${MELE_HOST_DIR:-/opt/mele-host}"
 set -a; . ./.env; set +a
+RAW=${MELE_RAW:-https://raw.githubusercontent.com/aporia-and-poros/mele-lite/main/host}
 
 case "${1:-help}" in
   pair)
@@ -12,11 +16,86 @@ case "${1:-help}" in
     if [ -n "$link" ] && command -v qrencode >/dev/null; then qrencode -t ansiutf8 "$link"; fi
     ;;
   status) docker compose ps; docker compose exec -T mele python -m api.host status ;;
-  update) docker compose pull && docker compose up -d && docker image prune -f >/dev/null
+  update) refresh_config
+          docker compose pull || { echo "拉新镜像失败：看看网络，过会儿再 mele-host update"; exit 1; }
+          docker compose up -d && docker image prune -f >/dev/null
           echo "更新好了。现在的版本："; sleep 3; docker compose exec -T mele printenv NEWAPP_BUILD || echo "（起来以后 mele-host status 能看）" ;;
-  logs)   docker compose logs -f --tail 200 mele ;;
+  memory) shift; memory "$@" ;;
+  logs)   docker compose logs -f --tail 200 "${2:-mele}" ;;
   stop)   docker compose stop ;;
   start)  docker compose up -d ;;
   key)    echo "$MASTER_KEY" ;;
-  *) echo "用法：mele-host pair | status | update | logs | stop | start | key" ;;
+  *) echo "用法：mele-host pair | status | update | logs | stop | start | key | memory on|off|status" ;;
 esac
+}
+
+# update 顺带把配置换成最新的（10-16：以前只拉镜像，docker-compose.yml 改了老用户收不到）。
+# 自己改过的旧文件留一份 .bak
+refresh_config() {
+  local tmp f
+  tmp=$(mktemp -d)
+  for f in docker-compose.yml Caddyfile mele-host; do
+    curl -fsSL "$RAW/$f" -o "$tmp/$f" || { echo "下载 $f 失败，配置先不换"; rm -rf "$tmp"; return 0; }
+  done
+  for f in docker-compose.yml Caddyfile; do
+    if [ ! -f "$f" ]; then cp "$tmp/$f" "$f"; echo "补上了 $f"
+    elif ! cmp -s "$tmp/$f" "$f"; then cp "$f" "$f.bak"; cp "$tmp/$f" "$f"; echo "换了新的 $f（旧的留在 $f.bak）"; fi
+  done
+  if ! cmp -s "$tmp/mele-host" /usr/local/bin/mele-host 2>/dev/null; then
+    install -m 755 "$tmp/mele-host" /usr/local/bin/mele-host 2>/dev/null && echo "mele-host 命令也更新了"
+  fi
+  rm -rf "$tmp"
+}
+
+setenv() {   # 在 .env 里设一行（有就改、没有就加）
+  if grep -q "^$1=" .env; then sed -i.tmp "s|^$1=.*|$1=$2|" .env && rm -f .env.tmp; else echo "$1=$2" >> .env; fi
+  export "$1=$2"
+}
+
+memory() {
+  case "${1:-status}" in
+    on)
+      local mem_mb force=${2:-}
+      mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+      if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 5500 ] && [ "$force" != "--force" ]; then
+        echo "内存只有 ${mem_mb}MB。记忆库要再多占 2～3GB，建议 6GB 以上，不然两个一起跑会被系统杀掉。"
+        echo "硬要装：mele-host memory on --force"
+        exit 1
+      fi
+      [ -n "${MELE_MEMORY_TOKEN:-}" ] || setenv MELE_MEMORY_TOKEN "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+      if [ -z "${MELE_MEMORY_TZ:-}" ]; then
+        setenv MELE_MEMORY_TZ "$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo UTC)"
+      fi
+      setenv COMPOSE_PROFILES memory
+      echo "▸ 建记忆库的数据库"
+      docker compose exec -T db psql -U mele -d mele -tAc "SELECT 1 FROM pg_database WHERE datname = 'mele_memory'" | grep -q 1 \
+        || docker compose exec -T db psql -U mele -d mele -qc "CREATE DATABASE mele_memory" >/dev/null
+      echo "▸ 拉记忆库镜像、启动"
+      docker compose pull -q --ignore-pull-failures memory
+      docker compose up -d memory
+      echo "▸ 等它起来（模型跟 Host 共用，一般一两分钟）"
+      local ok=""
+      for _ in $(seq 1 180); do
+        if docker compose exec -T memory python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)" >/dev/null 2>&1; then ok=1; break; fi
+        sleep 5
+      done
+      [ -n "$ok" ] || { echo "记忆库没起来，看看日志：mele-host logs memory"; exit 1; }
+      echo "▸ 接到 Mele"
+      docker compose exec -T -e MELE_MEMORY_TOKEN="$MELE_MEMORY_TOKEN" mele python -m api.host memory-link </dev/null
+      ;;
+    off)
+      docker compose exec -T mele python -m api.host memory-unlink </dev/null || true
+      docker compose rm -sf memory >/dev/null 2>&1 || true
+      setenv COMPOSE_PROFILES ""
+      echo "记忆库停了，数据还在（再开：mele-host memory on）"
+      ;;
+    status)
+      if [ "${COMPOSE_PROFILES:-}" != "memory" ]; then echo "记忆库没开（开：mele-host memory on）"; return 0; fi
+      if docker compose exec -T memory python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)" >/dev/null 2>&1
+      then echo "记忆库开着，好的"; else echo "记忆库开着但没响应，看日志：mele-host logs memory"; fi
+      ;;
+    *) echo "用法：mele-host memory on | off | status" ;;
+  esac
+}
+
+main "$@"

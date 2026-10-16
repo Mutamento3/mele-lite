@@ -2,6 +2,8 @@
     python -m api.host pair            # 出一张新配对码并打印（旧的没用过的作废）
     python -m api.host status          # 有没有主人、有没有没用的码
     python -m api.host warm            # 预先下载记忆模型 bge-m3（约 2.3GB），免得第一次聊天卡住
+    python -m api.host memory-link     # 接上 Host 自带的记忆库（mele-host memory on 调；钥匙从 MELE_MEMORY_TOKEN 来）
+    python -m api.host memory-unlink   # 断开（mele-host memory off 调）
 
 配对码只在出的那一刻看得到原文（库里只存哈希），所以 `pair` 每次都出一张新的。"""
 from __future__ import annotations
@@ -68,6 +70,8 @@ async def _main(args) -> int:
     await archive.apply_brain_schema(dsn)
     pool = await M.create_pool(dsn)
     try:
+        if args.cmd in ("memory-link", "memory-unlink"):
+            return await _memory(args.cmd, pool)
         if args.cmd == "status":
             print(f"版本：{os.environ.get('NEWAPP_BUILD', '').strip() or '（本机，没打版本）'}；"
                   f"主人：{'已配对' if await host.owner(pool) else '还没有'}；"
@@ -80,7 +84,31 @@ async def _main(args) -> int:
         await pool.close()
 
 
+async def _memory(cmd: str, pool) -> int:
+    from brain import auth, mcp
+    acc = await host.owner(pool)
+    if acc is None:
+        print("还没配对：先在 App 里配对（mele-host pair），再跑一次 mele-host memory on", file=sys.stderr)
+        return 1
+    if cmd == "memory-unlink":
+        print("断开了记忆库" if await mcp.unlink_bundled_memory(pool, acc) else "本来就没接")
+        return 0
+    token, key = os.environ.get("MELE_MEMORY_TOKEN", "").strip(), os.environ.get("NEWAPP_MASTER_KEY", "")
+    if not token or not key:
+        print("缺 MELE_MEMORY_TOKEN / NEWAPP_MASTER_KEY", file=sys.stderr)
+        return 2
+    sv, ticked = await mcp.link_bundled_memory(pool, auth.KeyBox(key), acc, token, now=datetime.now(timezone.utc))
+    try:
+        found = await mcp.tools(sv, fresh=True)
+    except mcp.MCPError as e:
+        print(f"接上了，但试的时候没通：{mcp.explain(e, sv.url)}", file=sys.stderr)
+        return 1
+    print(f"✅ 记忆库接好了（{len(found)} 个工具）。" + (f"已经给 {ticked} 个 TA 勾上；" if ticked else "")
+          + "以后新加的 TA 在 TA 设定 → MCP 服务里勾「记忆库」。")
+    return 0
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(prog="python -m api.host")
-    ap.add_argument("cmd", choices=["pair", "status", "warm"])
+    ap.add_argument("cmd", choices=["pair", "status", "warm", "memory-link", "memory-unlink"])
     sys.exit(asyncio.run(_main(ap.parse_args())))

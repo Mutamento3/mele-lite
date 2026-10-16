@@ -88,6 +88,7 @@ cat <<DONE
     以后随时看：mele-host key
 
 常用：mele-host pair（重新配对）· mele-host update（升级）· mele-host logs（看日志）
+想要记忆库（星图、别的 AI 也能连的那个）：mele-host memory on（内存建议 6GB 以上）
 DONE
 }
 

@@ -70,5 +70,5 @@ async def test_server(sid: UUID, acc=Depends(account), a: Api = Depends(api)):
     try:
         t = await mcp.tools(s, fresh=True)
     except mcp.MCPError as e:
-        return {"ok": False, "detail": "钥匙不对" if e.kind == "unauthorized" else "连不上，看看地址对不对、服务开着没"}
+        return {"ok": False, "detail": mcp.explain(e, s.url)}
     return {"ok": True, "tools": [x["name"] for x in t], "memory": mcp.is_memory(t)}
