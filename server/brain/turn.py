@@ -30,7 +30,7 @@ from llm.types import ChatRequest, ImagePart, Msg, ToolCall, ToolRound, Usage
 from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, media, probe as sentinel, reactions, tarot, vision, voice, wallet
 from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
-from . import repeats
+from . import chores, repeats
 from .context import ContextParts, build_request, render_volatile, user_tag
 from . import inner_voice, monologue
 from . import bilingual, group as G, groups, model_noise, timeline
@@ -57,6 +57,7 @@ USER_ERRORS = {
     "zh": {"auth": "模型的 key 好像不对，去设置里检查一下。",
            "balance": "模型那边的余额不够了，充值以后再来找我。",
            "model": "设置里的模型名找不到，检查一下拼写。",
+           "not_chat": "这把钥匙填的模型不能拿来聊天（像 gpt-image-1 这种画图模型，或者只支持新接口的 o1-pro / codex）。给 TA 换一个聊天模型；想让 TA 画图，在钥匙串里给一把钥匙勾「画图」。",
            "rate": "模型那边太忙了，等一会儿再试。",
            "overloaded": "模型那边太忙了，等一会儿再试。",
            "network": "连不上模型，检查一下网络。",
@@ -67,6 +68,7 @@ USER_ERRORS = {
     "en": {"auth": "The model key doesn't seem right — check it in Settings.",
            "balance": "The model account is out of credit. Top it up and come back.",
            "model": "The model name in Settings wasn't found — check the spelling.",
+           "not_chat": "The model on this key can't chat (an image model like gpt-image-1, or one that only works on the newer API like o1-pro / codex). Give them a chat model; to let them draw, tick \"Draw\" on a key in Keys.",
            "rate": "The model is busy right now. Try again in a moment.",
            "overloaded": "The model is busy right now. Try again in a moment.",
            "network": "Can't reach the model — check the connection.",
@@ -75,6 +77,8 @@ USER_ERRORS = {
            "other": "Something went wrong on the model's side. Try again later.",
            "trial_over": "Today's free allowance is used up — a little more comes back at 5 am. Add your own key or become a member to skip the wait — everything we said and everything I remembered is still here."},
 }
+DRAW_NOTICE = {"zh": "TA 现在还不会画图：去 Me →「看图和画图」填一把画图钥匙（Gemini、OpenAI 或中转站），填了所有 TA 都能画。",
+               "en": "They can't draw yet: add a drawing key (Gemini, OpenAI or a relay) in Me → \"Seeing & drawing\" — then every companion can draw."}
 LAST_ROUND_NOTE = {"zh": "\n（这一轮能调工具的次数用完了，接下来直接回话。）",
                    "en": "\n(That was the last tool call allowed this turn — reply directly now.)"}
 LEDGER_NOTICE = {"zh": "账本最近几次都没写成功，旧的对话先原样留着，只是每轮会贵一点。可以在设置里换一个写账本的模型。",
@@ -548,6 +552,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         outside = await _safe(mcp.toolbox(pool, getattr(deps.keys, "box", None), acc, settings.mcp_servers), mcp.Toolbox())
     draw_on = (not scope.incognito and group is None and deps.files_dir is not None   # 挑了画图钥匙才给 draw（10-15）
                and await _safe(media.image_route(pool, getattr(deps.keys, "box", None), acc), None) is not None)
+    if not draw_on and group is None and not wake and not scope.incognito and chores.wants_drawing(text):
+        await emit({"type": "notice", "text": DRAW_NOTICE[lang]})    # 叫 TA 画、还没挑画图钥匙：提醒去哪挑（10-16）
     parts = ContextParts(
         tools=[t for t in tool_specs() if t.name in GROUP_TOOLS] if group is not None
         else tool_specs(incognito=scope.incognito, extra=("draw",) if draw_on else ()) + outside.specs,

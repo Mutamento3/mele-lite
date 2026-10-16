@@ -35,4 +35,21 @@ import Testing
         #expect(Chores.odd == ["dedupe", "food", "caption", "import", "music", "translate"])
         #expect(Set(Chores.all) == Chores.own.union(Chores.odd).union(["vision", "draw", "ledger", "voice"]))
     }
+
+    @Test func imageModelAndNotChat() {
+        // 10-16 内测：钥匙上填 gpt-image-1 当聊天模型
+        #expect(Chores.isImageModel("gpt-image-1") && Chores.isImageModel("dall-e-3") && Chores.isImageModel("gemini-2.5-flash-image"))
+        #expect(!Chores.isImageModel("gpt-5.6") && !Chores.isImageModel("gemini-3.5-flash") && !Chores.isImageModel(""))
+        #expect(Chores.notChatModelError("HTTP 400 This model is not supported on the Chat Completions endpoint"))
+        #expect(!Chores.notChatModelError("HTTP 400 bad request"))
+    }
+
+    @Test func wantsDrawing() {
+        for t in ["生成一张男大学生自拍照", "画一幅海边", "给我画个头像", "能出图吗", "Draw me a cat", "can you generate an image of a dog"] {
+            #expect(Chores.wantsDrawing(t), "\(t)")
+        }
+        for t in ["画画课好累", "今天拍了张照片", "生个孩子吧", "I drew this yesterday", "你看这张图"] {
+            #expect(!Chores.wantsDrawing(t), "\(t)")
+        }
+    }
 }

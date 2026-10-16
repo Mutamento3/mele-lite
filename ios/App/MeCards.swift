@@ -208,12 +208,13 @@ struct KeychainCard: View {
                 Label("加一把钥匙", systemImage: "plus").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.accentDeep)
             }
             .buttonStyle(.plain)
-            Hint(text: String(localized: "用自己的 key，聊天不限量；钱直接付给模型那家。点一把钥匙勾它干哪些活。"))
+            Hint(text: String(localized: "用自己的 key，聊天不限量；钱直接付给模型那家。看图、画图在下面那张卡里直接填；别的后台活点一把钥匙勾。"))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .meleMediaChanged)) { _ in Task { await load() } }
         .sheet(isPresented: $adding) {
             AddKeyView { newKey in
                 Task { if !newKey.isEmpty { await model.useKeyWhereFree(newKey) }; await load() }
@@ -651,7 +652,180 @@ struct ContextCard: View {
 
 extension Notification.Name {
     static let meleKeysChanged = Notification.Name("MeleKeysChanged")
+    static let meleMediaChanged = Notification.Name("MeleMediaChanged")     // 看图和画图那张卡改了，钥匙串跟着刷标签
 }
 
-/// 看图和画图（10-15 Aporia）：从钥匙串里挑一把专门看图（TA 的模型看不见图时替它看），一把画图（挑了 TA 才有 draw）。
-/// 接口 GET / PUT me/media（Lite 本机 LocalMedia；Host routes_account）；旧 Host 没这个接口就不显示
+/// 看图和画图（10-15 Aporia）。10-16 Aporia：从钥匙串挑太绕（还得先填个聊天模型，内测把画图模型填成了聊天模型）、
+/// 看图画图一般不是同一把——改成两栏直接填：哪家 / key / 中转站地址 / 模型。不进钥匙串，TA 的聊天钥匙里选不到。
+/// 存的时候查一遍那家的模型列表（不花钱），当场说 key 对不对、有没有这个模型、中转站的画图模型叫什么。
+/// 接口 GET me/media、PUT me/media/direct/{vision|draw}（Lite 本机 LocalMedia；Host routes_account）；旧 Host 没这个接口就不显示
+struct MediaKeysCard: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var theme: AppTheme
+    @State private var media: Media?
+    @State private var editing: String?
+
+    struct Slot: Decodable {
+        var provider: String
+        var baseURL: String?
+        var model: String
+        var last4: String
+        enum CodingKeys: String, CodingKey { case provider, model, last4, baseURL = "base_url" }
+    }
+    struct Media: Decodable {
+        var visionKey: String?
+        var imageKey: String?
+        var defaultModels: [String: String]
+        var visionDefaults: [String: String]?
+        var direct: [String: Slot?]?
+        enum CodingKeys: String, CodingKey {
+            case visionKey = "vision_key", imageKey = "image_key", defaultModels = "default_models"
+            case visionDefaults = "vision_defaults", direct
+        }
+        func slot(_ s: String) -> Slot? { (direct?[s]) ?? nil }
+    }
+
+    var body: some View {
+        Group {
+            if let m = media {
+                VStack(alignment: .leading, spacing: 14) {
+                    CardTitle(text: String(localized: "看图和画图"))
+                    row("vision", String(localized: "看图"), m)
+                    Hint(text: String(localized: "TA 用的模型看不见图（DeepSeek 这类）时，你发的照片先给这把看、写一段描述递给 TA，以后翻旧账也记得。"))
+                    Divider().opacity(0.4)
+                    row("draw", String(localized: "画图"), m)
+                    Hint(text: String(localized: "填了以后所有 TA 都会画：跟 TA 说「画一张……」就行，画好的跟它的话一起发过来，花这把 key 的钱。"))
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardSurface()
+            }
+        }
+        .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .meleKeysChanged)) { _ in Task { await load() } }
+        .sheet(item: Binding(get: { editing.map(SlotID.init) }, set: { editing = $0?.id })) { e in
+            MediaKeySheet(slot: e.id, current: media?.slot(e.id),
+                          defaults: e.id == "draw" ? media?.defaultModels ?? [:] : media?.visionDefaults ?? [:]) { m in media = m }
+                .environmentObject(model).environmentObject(theme)
+                .environment(\.colorScheme, .light)
+        }
+    }
+
+    struct SlotID: Identifiable { let id: String }
+
+    private func row(_ slot: String, _ title: String, _ m: Media) -> some View {
+        Button { editing = slot } label: {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let d = m.slot(slot) {
+                        Text("\(KeychainCard.providerName(d.provider)) · \(d.model.isEmpty ? String(localized: "默认模型") : d.model)")
+                            .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.accentDeep)
+                        Text("••••\(d.last4)").font(Typo.number(Typo.Size.caption, .regular)).foregroundStyle(theme.inkFaint)
+                    } else {
+                        Text(String(localized: "填一把")).font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.accentDeep)
+                        if (slot == "vision" ? m.visionKey : m.imageKey) != nil {
+                            Text(String(localized: "现在用钥匙串里勾的那把")).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                        }
+                    }
+                }
+                Image(systemName: "chevron.right").font(Typo.icon(11)).foregroundStyle(theme.inkFaint)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func load() async {
+        if let m: Media = try? await model.api.call("GET", "me/media") { media = m }
+    }
+}
+
+/// 填一栏：哪家 / key / 中转站地址 / 模型。存了当场查模型列表，说通没通
+struct MediaKeySheet: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var theme: AppTheme
+    @Environment(\.dismiss) private var dismiss
+    let slot: String
+    let current: MediaKeysCard.Slot?
+    let defaults: [String: String]
+    let onSaved: (MediaKeysCard.Media) -> Void
+    @State private var provider = "gemini"
+    @State private var apiKey = ""
+    @State private var baseURL = ""
+    @State private var modelName = ""
+    @State private var saving = false
+    @State private var result: (ok: Bool, text: String)?
+
+    struct Saved: Decodable {
+        struct Check: Decodable { let ok: Bool; let message: String }
+        let check: Check?
+    }
+
+    private var providers: [String] { slot == "draw" ? ["gemini", "openai", "openai-compatible"] : ["gemini", "anthropic", "openai", "openai-compatible"] }
+    private var relay: Bool { provider == "openai-compatible" }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("哪家", selection: $provider) {
+                        ForEach(providers, id: \.self) { Text(KeychainCard.providerName($0)).tag($0) }
+                    }
+                    SecureField(current == nil ? String(localized: "把 key 贴在这里") : String(localized: "已存 ••••\(current!.last4)，不换就空着"), text: $apiKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if relay {
+                        TextField("接口地址（https://…/v1）", text: $baseURL)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    }
+                    TextField(relay ? String(localized: "模型名（必填）") : String(localized: "模型名（空着用 \(defaults[provider] ?? "")）"), text: $modelName)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                } footer: {
+                    Text(slot == "draw"
+                         ? String(localized: "只填一个模型名，是这家的画图模型；空着用默认的。中转站填它后台里画图模型的名字。这把只管画图，不会拿去聊天。")
+                         : String(localized: "填一个会看图的模型；空着用默认的。中转站填它后台里会看图的模型名字。这把只管看图，不会拿去聊天。"))
+                }
+                if let result {
+                    Section { Label(result.text, systemImage: result.ok ? "checkmark.circle" : "exclamationmark.triangle")
+                        .foregroundStyle(result.ok ? theme.accentDeep : .red) }
+                }
+                if current != nil {
+                    Section { Button("清掉这一栏", role: .destructive) { Task { await save(clear: true) } } }
+                }
+            }
+            .navigationTitle(slot == "draw" ? String(localized: "画图钥匙") : String(localized: "看图钥匙"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(result?.ok == true ? "好" : "取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    if saving { ProgressView() } else {
+                        Button("存") { Task { await save(clear: false) } }
+                            .disabled((current == nil && apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                                      || (relay && (baseURL.trimmingCharacters(in: .whitespaces).isEmpty || modelName.trimmingCharacters(in: .whitespaces).isEmpty)))
+                    }
+                }
+            }
+            .onAppear {
+                if let c = current { provider = c.provider; baseURL = c.baseURL ?? ""; modelName = c.model }
+            }
+        }
+    }
+
+    private func save(clear: Bool) async {
+        saving = true
+        defer { saving = false }
+        let body: [String: Any] = clear ? [:] : ["provider": provider, "api_key": apiKey, "base_url": relay ? baseURL : "", "model": modelName]
+        do {
+            let r: Saved = try await model.api.call("PUT", "me/media/direct/\(slot)", json: body)
+            if let m: MediaKeysCard.Media = try? await model.api.call("GET", "me/media") { onSaved(m) }
+            if clear { dismiss(); return }
+            apiKey = ""
+            result = r.check.map { ($0.ok, $0.message) } ?? (true, String(localized: "存好了"))
+        } catch let e as APIError {
+            result = (false, e.message)
+        } catch {
+            result = (false, String(localized: "没存上，过会儿再试"))
+        }
+    }
+}

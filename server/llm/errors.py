@@ -11,8 +11,17 @@ class LLMError(Exception):
         self.status = status
 
 
+def not_chat(message: str) -> bool:
+    """聊天接口说「这个模型不在这儿」：画图模型（gpt-image-1）、只走 Responses 的（o1-pro / codex）。跟 Chores.notChatModelError 同一个"""
+    lo = (message or "").lower()
+    return any(w in lo for w in ("not supported on the chat completions", "only supported in v1/responses",
+                                 "not a chat model", "not supported in the v1/chat/completions"))
+
+
 def from_status(status: int, message: str = "") -> LLMError:
     """按 HTTP 状态码归类。402 是 DeepSeek 的「余额不足」；OpenAI 余额不足是 429 + insufficient_quota。"""
+    if not_chat(message):
+        return LLMError("not_chat", message, status=status)
     if status == 429 and "quota" in message.lower():
         return LLMError("balance", message, status=status)
     if status in (401, 403):

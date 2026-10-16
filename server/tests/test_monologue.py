@@ -66,3 +66,14 @@ def test_inner_voice_survives_unclosed_monologue_10_15():
     assert inner_voice.split(body)[1] == "其实想抱很久了。"
     mono, body = split_monologue("[独白]\n她累了\n[/独白]\n你先睡。\n【心声】舍不得【/心声】")
     assert (mono, inner_voice.split(body)) == ("她累了", ("你先睡。", "舍不得"))
+
+
+def test_second_unclosed_monologue_does_not_leak_10_16():
+    from brain.monologue import split_monologue
+    text = "[独白]\n她今天累了。\n[/独白]\n\n抱抱你。\n\n[独白]\n她还没吃饭，我有点急。\n\n你先去吃饭，好不好。"
+    mono, body = split_monologue(text)
+    assert "独白" not in body and "我有点急" not in body
+    assert body.startswith("抱抱你") and "你先去吃饭" in body
+    assert "我有点急" in mono
+    mono, body = split_monologue("[独白]\n想她。\n[/独白]\n抱抱你。\n[/独白]")
+    assert body == "抱抱你。" and mono == "想她。"

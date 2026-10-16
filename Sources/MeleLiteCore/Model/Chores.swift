@@ -46,6 +46,27 @@ public enum Chores {
         return (out, moved)
     }
 
+    /// 画图模型（不能拿来聊天）。10-16 内测：钥匙上填了 gpt-image-1 当聊天模型 →「not supported on the Chat Completions endpoint」
+    public static func isImageModel(_ model: String) -> Bool {
+        let m = model.lowercased()
+        return m.hasPrefix("gpt-image") || m.hasPrefix("dall-e") || m.hasPrefix("imagen") || m.contains("-image")
+    }
+
+    /// 聊天接口说「这个模型不在这儿」：画图模型、只走 Responses 的（o1-pro / codex）
+    public static func notChatModelError(_ text: String) -> Bool {
+        let l = text.lowercased()
+        return l.contains("not supported on the chat completions") || l.contains("only supported in v1/responses")
+            || l.contains("not a chat model") || l.contains("not supported in the v1/chat/completions")
+    }
+
+    /// 用户是不是在叫 TA 画图（10-16：没挑画图钥匙时在聊天里提醒一句去哪挑）。跟 chores.wants_drawing 同一个
+    static let drawAsk = try! NSRegularExpression(
+        pattern: #"(画|生成)(一|几|两|三)?(张|幅|个)|生图|出图|(生成|画).{0,10}(图|照片|自拍|头像|壁纸|插画)|\b(draw|paint|generate|make)\b.{0,20}\b(image|picture|photo|selfie|drawing|portrait)s?\b|\bdraw me\b"#,
+        options: [.caseInsensitive])
+    public static func wantsDrawing(_ text: String) -> Bool {
+        drawAsk.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
+    }
+
     public static func pick(_ table: [String: String], _ chore: String, live: [String: String]) -> String? {
         guard let k = table[chore], let p = live[k], can(p).contains(chore) else { return nil }
         return k

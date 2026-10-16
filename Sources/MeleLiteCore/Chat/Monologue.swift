@@ -28,7 +28,14 @@ public enum Monologue {
         var (mono, body) = splitOnce(text)
         guard !mono.isEmpty else { return (mono, body) }
         var monos = [mono]
-        while pairCount(body) >= 2 {
+        // 10-16 内测截图：第二段只写了开头的 [独白]、没收尾 → 原来要成对才接着切，那个 [独白] 连同后面的心里话原样漏进正文。
+        // 现在剩一个开头也切（照「只开不收」：从第一段说「你」的开始算正文）；剩一个孤零零的收尾就只删标记
+        while let first = tag.firstMatch(in: body, range: NSRange(location: 0, length: (body as NSString).length)) {
+            let ns = body as NSString
+            if pairCount(body) < 2, isClose(ns.substring(with: first.range)) {
+                body = (ns.substring(to: first.range.location) + ns.substring(from: first.range.upperBound)).trimmingCharacters(in: .whitespacesAndNewlines)
+                continue
+            }
             let (more, rest) = splitOnce(body)
             guard rest != body else { break }
             if !more.isEmpty && !monos.contains(more) { monos.append(more) }

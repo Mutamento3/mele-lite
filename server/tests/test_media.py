@@ -98,3 +98,66 @@ async def test_no_image_key_no_draw_tool(pool, tmp_path):
         await c.post(f"/conversations/{conv['id']}/messages", json={"text": "在吗"})
         await e.rooms.idle(UUID(conv["id"]))
     assert "draw" not in {s.name for s in e.model.requests[0].tools}
+
+
+def fake_relay(seen, *, models=("gemini-2.5-flash", "gpt-image-1-mini", "nano-banana"), images_ok=False):
+    """假中转站：/models 列表；/images/generations 503（没这条渠道）；/chat/completions 回带 data URI 的图"""
+    def handle(req: httpx.Request):
+        seen.append((req.method, req.url.path))
+        assert req.headers["authorization"] == "Bearer sk-relay-3333"
+        if req.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": m} for m in models]})
+        if req.url.path.endswith("/images/generations"):
+            if images_ok:
+                return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(png()).decode()}]})
+            return httpx.Response(503, json={"error": {"message": "no available channel for model"}})
+        b64 = base64.b64encode(png()).decode()
+        return httpx.Response(200, json={"choices": [{"message": {"content": f"好的 ![img](data:image/png;base64,{b64})"}}]})
+    return httpx.MockTransport(handle)
+
+
+async def test_direct_keys_check_and_route_10_16(pool):
+    """10-16：Me 里直接填看图 / 画图钥匙——存时查模型列表；直接填的优先于钥匙串；清掉回到钥匙串"""
+    seen = []
+    media.TRANSPORT = fake_relay(seen)
+    try:
+        e = Env(pool)
+        t = await e.login()
+        async with e.client(t) as c:
+            relay = {"provider": "openai-compatible", "api_key": "sk-relay-3333", "base_url": "https://relay.example/v1/"}
+            assert (await c.put("/me/media/direct/draw", json={**relay, "model": ""})).status_code == 400      # 中转站要填模型
+            assert (await c.put("/me/media/direct/draw", json={"provider": "deepseek", "api_key": "x"})).status_code == 400
+            got = (await c.put("/me/media/direct/draw", json={**relay, "model": "gpt-image-1"})).json()
+            assert got["check"]["ok"] is False and "gpt-image-1-mini" in got["check"]["message"] and "nano-banana" in got["check"]["message"]
+            assert got["direct"]["draw"]["last4"] == "3333" and "secret" not in got["direct"]["draw"]
+            assert got["direct"]["draw"]["base_url"] == "https://relay.example/v1"
+            got = (await c.put("/me/media/direct/draw", json={**relay, "api_key": "", "model": "nano-banana"})).json()   # 不重填 key
+            assert got["check"]["ok"] is True
+            acc = await pool.fetchval("SELECT id FROM accounts LIMIT 1")
+            assert await media.image_route(pool, e.deps.keys.box, acc) == ("openai-compatible", "sk-relay-3333", "nano-banana", "https://relay.example/v1")
+            assert await media.vision_route(pool, e.deps.keys.box, acc) is None
+            _, gm = await _keys(c)
+            await c.put("/me/media", json={"image_key": gm["id"]})
+            assert (await media.image_route(pool, e.deps.keys.box, acc))[0] == "openai-compatible"        # 直接填的优先
+            got = (await c.put("/me/media/direct/draw")).json()                                             # 清掉
+            assert got["direct"]["draw"] is None and got["check"] is None
+            assert (await media.image_route(pool, e.deps.keys.box, acc))[0] == "gemini"                    # 回到钥匙串那把
+    finally:
+        media.TRANSPORT = None
+
+
+async def test_relay_draw_falls_back_to_chat_10_16():
+    seen = []
+    media.TRANSPORT = fake_relay(seen)
+    try:
+        data = await media.generate("openai-compatible", "sk-relay-3333", "nano-banana", "https://relay.example/v1", "海")
+        assert data == png() and [p for _, p in seen] == ["/v1/images/generations", "/v1/chat/completions"]
+    finally:
+        media.TRANSPORT = None
+
+
+def test_verdict_10_16():
+    assert media.verdict(401, [], "x", "draw")["ok"] is False
+    assert media.verdict(404, [], "x", "draw")["ok"] is True                     # 不给看列表：存下，用时才知道
+    assert media.verdict(200, ["gpt-4.1-mini"], "gpt-4.1-mini", "vision")["ok"] is True
+    assert "没有画图模型" in media.verdict(200, ["gpt-4.1-mini"], "gpt-image-1", "draw")["message"]

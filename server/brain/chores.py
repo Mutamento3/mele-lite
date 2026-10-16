@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from uuid import UUID
 
 CHORES = ("vision", "draw", "ledger", "dedupe", "food", "caption", "import", "music", "translate",
@@ -53,6 +54,21 @@ def assign(table: dict[str, str], key_id: str, provider: str, chores: list[str])
             moved.append({"chore": c, "from_key": out[c]})
         out[c] = key_id
     return out, moved
+
+
+_DRAW_ASK = re.compile(r"(画|生成)(一|几|两|三)?(张|幅|个)|生图|出图|(生成|画).{0,10}(图|照片|自拍|头像|壁纸|插画)"
+                       r"|\b(draw|paint|generate|make)\b.{0,20}\b(image|picture|photo|selfie|drawing|portrait)s?\b|\bdraw me\b", re.I)
+
+
+def wants_drawing(text: str) -> bool:
+    """用户是不是在叫 TA 画图（10-16：没挑画图钥匙时提醒一句去哪挑）。跟 Chores.wantsDrawing 同一个"""
+    return bool(_DRAW_ASK.search(text or ""))
+
+
+def is_image_model(model: str) -> bool:
+    """画图模型（不能拿来聊天）。10-16 内测：钥匙上填了 gpt-image-1 当聊天模型。跟 Chores.isImageModel 同一个规矩"""
+    m = (model or "").lower()
+    return m.startswith(("gpt-image", "dall-e", "imagen")) or "-image" in m
 
 
 def pick(table: dict[str, str], chore: str, live: dict[str, str]) -> str | None:

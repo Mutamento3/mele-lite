@@ -399,9 +399,22 @@ final class LocalBrain: @unchecked Sendable {
         // 看图（10-15）：TA 的模型看不见图时，这一轮发的照片先交给看图钥匙写描述（存在附件上，以后的历史里也用它）
         let sees = provider.seesImages
         if !sees {
+            var blind = false
             for id in images where host.store.collection("attachments").first(where: { ($0["id"] as? String) == id })?["kind"] as? String == "image" {
-                _ = await LocalMedia.describe(host, attachment: id, zh: zh)
+                if await LocalMedia.describe(host, attachment: id, zh: zh) == nil { blind = true }
             }
+            // 10-16 内测「点钥匙再勾太隐秘」：看不见、又没有看图钥匙的，聊天里提醒一句去哪挑
+            if blind, LocalMedia.visionRoute(host) == nil {
+                say(["type": "notice", "text": zh ? "TA 的模型看不见图，这张它只知道你发了照片。去 Me →「看图和画图」填一把会看图的钥匙（Gemini、Claude、OpenAI 或中转站），以后就能替它看。"
+                                                  : "Their model can't see images, so it only knows you sent a photo. Add a key that can see (Gemini, Claude, OpenAI or a relay) in Me → \"Seeing & drawing\"."])
+            }
+        }
+        // 叫 TA 画图、但还没挑画图钥匙：TA 手里没有 draw，只会嘴上答应。提醒一句去哪挑（10-16）
+        if group == nil, nudge == nil, LocalMedia.imageRoute(host) == nil,
+           let said = host.store.messages(conv).last(where: { ($0["role"] as? String) == "user" })?["text"] as? String,
+           Chores.wantsDrawing(said) {
+            say(["type": "notice", "text": zh ? "TA 现在还不会画图：去 Me →「看图和画图」填一把画图钥匙（Gemini、OpenAI 或中转站），填了所有 TA 都能画。"
+                                              : "They can't draw yet: add a drawing key (Gemini, OpenAI or a relay) in Me → \"Seeing & drawing\" — then every companion can draw."])
         }
 
         // 积压（10-13 内测：中转不报用量的老版本积了几千条没卷）：先卷了再聊，不然这一轮整段发出去，装不下就报错、永远轮不到卷
@@ -1108,6 +1121,10 @@ final class LocalBrain: @unchecked Sendable {
             }
             return zh ? "这家没有叫\(name.isEmpty ? "这个名字" : "「\(name)」")的模型（或者你的 key 用不了它）。去 Me →「钥匙串」删掉这把重新加，点「拉取这家的模型列表」从里面选，别手打。"
                       : "This provider has no model called \(name.isEmpty ? "that" : "\"\(name)\"") (or your key can't use it). Re-add the key in Me → Keys and pick from \"Fetch this provider's model list\" instead of typing it."
+        }
+        if Chores.notChatModelError(l) {
+            return zh ? "这把钥匙填的模型不能拿来聊天（像 gpt-image-1 这种画图模型，或者只支持新接口的 o1-pro / codex）。给 TA 换一个聊天模型；想让 TA 画图，在钥匙串里给一把钥匙勾「画图」。"
+                      : "The model on this key can't chat (an image model like gpt-image-1, or one that only works on the newer API like o1-pro / codex). Give them a chat model; to let them draw, tick \"Draw\" on a key in Keys."
         }
         if status == 402 || has("insufficient", "balance", "credit", "billing", "exceeded your current quota", "余额", "欠费", "payment") {
             return zh ? "这把 key 的余额不够了。去服务商那边充一点，或者在 TA 设定里换一把钥匙。" : "This key is out of credit. Top it up with the provider, or switch keys in their settings."

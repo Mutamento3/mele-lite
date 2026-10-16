@@ -53,7 +53,12 @@ def split_monologue(text: str) -> tuple[str, str]:
     if not mono:
         return mono, body
     monos = [mono]
-    while len(_TAG.findall(body)) >= 2:
+    # 10-16 内测截图：第二段只写了开头的 [独白]、没收尾 → 原来要成对才接着切，那个 [独白] 连同后面的心里话原样漏进正文。
+    # 现在剩一个开头也切（照「只开不收」）；剩一个孤零零的收尾就只删标记
+    while first := _TAG.search(body):
+        if len(_TAG.findall(body)) < 2 and _CLOSE_SHAPE.search(first.group(0)):
+            body = (body[:first.start()] + body[first.end():]).strip()
+            continue
         more, rest = _split_once(body)
         if rest == body:
             break

@@ -124,3 +124,22 @@ async def test_ledger_leg_can_be_another_key():
     assert entry and "芒果" in entry
     assert cheap.requests[0].model == "cheap-model" and chat.requests[0].model == "chat-model"
     assert spent[0][0] == "chat-model"
+
+
+def test_image_model_and_not_chat_10_16():
+    """10-16 内测：钥匙上填 gpt-image-1 当聊天模型 → OpenAI 回「not supported on the Chat Completions endpoint」"""
+    from brain.chores import is_image_model
+    from llm.errors import from_status
+    assert is_image_model("gpt-image-1") and is_image_model("dall-e-3") and is_image_model("gemini-2.5-flash-image")
+    assert not is_image_model("gpt-5.6") and not is_image_model("gemini-3.5-flash") and not is_image_model("")
+    e = from_status(400, "This model is not supported on the Chat Completions endpoint")
+    assert e.kind == "not_chat"
+    assert from_status(400, "bad thing").kind == "bad_request"
+
+
+def test_wants_drawing_10_16():
+    from brain.chores import wants_drawing
+    for t in ("生成一张男大学生自拍照", "画一幅海边", "给我画个头像", "能出图吗", "Draw me a cat", "can you generate an image of a dog"):
+        assert wants_drawing(t), t
+    for t in ("画画课好累", "今天拍了张照片", "生个孩子吧", "I drew this yesterday", "你看这张图"):
+        assert not wants_drawing(t), t

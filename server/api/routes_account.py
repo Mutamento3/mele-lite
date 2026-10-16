@@ -139,6 +139,17 @@ async def put_media(body: dict = Body(...), acc: UUID = Depends(account), a: Api
     return await media.public(a.deps.pool, acc, a.deps.now())
 
 
+@router.put("/me/media/direct/{slot}")
+async def put_media_direct(slot: str, body: dict | None = Body(default=None), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """直接填看图 / 画图钥匙（10-16）。body 空 = 清掉；回 {..., check: {ok, message}}"""
+    try:
+        checked = await media.put_direct(a.deps.pool, getattr(a.deps.keys, "box", None), acc, slot,
+                                         body if body else None)
+    except ValueError as e:
+        raise _bad(e) from e
+    return {**await media.public(a.deps.pool, acc, a.deps.now()), "check": checked}
+
+
 # ── 钥匙串 ──
 
 def _key(k: auth.KeyInfo, table: dict | None = None) -> dict:

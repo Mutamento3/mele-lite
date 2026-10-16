@@ -119,6 +119,13 @@ enum LocalMap {
             return zh ? "〔现在〕线下：你和 TA 一起在「\(name)」。今天原本的安排先放一边，照着眼前说。"
                       : "[Right now] In person: you and them are together at \"\(name)\". Set today's plan aside; stay in this scene."
         }
+        // 10-16 内测：没开地图、直接开线下模式聊「我们在吃火锅」，它却说「我马上到」——
+        // 线下模式算「线下生活开着」，后台排了它自己的一天，这里每轮告诉它「你在某某地方」，跟眼前的场景打架。
+        // 线下模式里一律跟着聊天走，不给行程
+        if st["long_mode"] as? Bool == true {
+            return zh ? "〔现在〕线下：你和 TA 在一起，在哪、在干嘛照你们聊的来。今天原本的安排先放一边，照着眼前说。"
+                      : "[Right now] In person: you and them are together; where you are and what you're doing follow your conversation. Set today's plan aside; stay in this scene."
+        }
         guard lifeOn(s, cid), let n = now(s, cid) else { return "" }
         let place = places(s, cid).first { ($0["id"] as? Int) == (n["place_id"] as? Int) }
         let name = place?["name"] as? String ?? ""

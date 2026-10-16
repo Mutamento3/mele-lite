@@ -77,7 +77,7 @@ final class LocalHost: @unchecked Sendable {
             if let res = await LocalMemoryRooms.handle(r, host: self) { return res }
             if let res = await LocalFood.handle(r, host: self) { return res }
             if let res = LocalBooks.handle(r, host: self) { return res }
-            if let res = LocalMedia.handle(r, host: self) { return res }
+            if let res = await LocalMedia.handle(r, host: self) { return res }
             if let res = LocalPeek.handle(r, host: self) { return res }
             if let res = LocalFriends.handle(r, host: self) { return res }
             if let res = LocalMap.handle(r, host: self) { return res }

@@ -67,6 +67,15 @@ import Testing
 }
 
 @Suite struct MonologueTagShapes1015 {
+    @Test func secondUnclosedMonologueDoesNotLeak() {
+        // 10-16 内测截图：第二段只写了开头的 [独白]
+        let (mono, body) = Monologue.split("[独白]\n她今天累了。\n[/独白]\n\n抱抱你。\n\n[独白]\n她还没吃饭，我有点急。\n\n你先去吃饭，好不好。")
+        #expect(!body.contains("独白") && !body.contains("我有点急"))
+        #expect(body.hasPrefix("抱抱你") && body.contains("你先去吃饭") && mono.contains("我有点急"))
+        let (m2, b2) = Monologue.split("[独白]\n想她。\n[/独白]\n抱抱你。\n[/独白]")
+        #expect(b2 == "抱抱你。" && m2 == "想她。")
+    }
+
     @Test func oddBracketsAndWords() {
         #expect(Monologue.split("【独白】\n她今天累了。\n【/独白】\n早点睡吧你。") == ("她今天累了。", "早点睡吧你。"))
         #expect(Monologue.split("<独白>她在笑</独白>你笑什么") == ("她在笑", "你笑什么"))

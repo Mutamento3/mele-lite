@@ -3,6 +3,8 @@ import SwiftUI
 /// 钥匙串分活（10-15）：活儿的名字、分组，和点开一把钥匙的活儿单。文案用「TA」。
 enum ChoreNames {
     static let main = ["vision", "draw", "ledger"]
+    static let media = ["vision", "draw"]          // 10-16：在 Me 的「看图和画图」卡里挑，勾选单里不放
+    static var sheet: [String] { main.filter { !media.contains($0) } }
     static let odd = ["dedupe", "food", "caption", "import", "music", "translate"]
     static let own = ["diary", "day", "moments", "tarot", "focus"]
 
@@ -63,13 +65,7 @@ struct KeyChoresSheet: View {
                     }
                 } else {
                     Section {
-                        ForEach(ChoreNames.main, id: \.self) { c in
-                            row(c)
-                            if c == "draw" && picked.contains("draw") {
-                                TextField(String(localized: "画图模型（不填用默认）"), text: $drawModel)
-                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            }
-                        }
+                        ForEach(ChoreNames.sheet, id: \.self) { row($0) }
                         DisclosureGroup(isExpanded: $openOdd) {
                             ForEach(ChoreNames.odd, id: \.self) { row($0) }
                             Text("TA 亲笔的（默认跟聊天）").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
@@ -81,7 +77,7 @@ struct KeyChoresSheet: View {
                             )) { Text("后台杂活") }
                         }
                     } footer: {
-                        Text("一样活只归一把钥匙；没勾的活用 TA 聊天那把。TA 亲笔的是 TA 本人在写，换便宜模型会变味，要单独勾。")
+                        Text("一样活只归一把钥匙；没勾的活用 TA 聊天那把。TA 亲笔的是 TA 本人在写，换便宜模型会变味，要单独勾。看图、画图在 Me 的「看图和画图」里直接填。")
                     }
                     if let note { Section { Text(note).foregroundStyle(theme.inkDim) } }
                 }
@@ -108,7 +104,9 @@ struct KeyChoresSheet: View {
     }
 
     private func save() async {
-        let list = ChoreNames.main.filter(picked.contains) + ChoreNames.odd.filter(picked.contains) + ChoreNames.own.filter(picked.contains)
+        // 看图 / 画图不在这页改：这把原来有的照旧带上，别存的时候被抹掉
+        let list = ChoreNames.media.filter(key.chores.contains) + ChoreNames.sheet.filter(picked.contains)
+            + ChoreNames.odd.filter(picked.contains) + ChoreNames.own.filter(picked.contains)
         do {
             let r: Saved = try await model.api.call("PATCH", "keys/\(key.id)", json: ["chores": list, "draw_model": drawModel])
             onChanged()
