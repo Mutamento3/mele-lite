@@ -4,7 +4,7 @@ import UIKit
 import MeleLiteCore
 
 /// 书架（10-04 Aporia：Lite 也要能读书）：照 server/api/routes_books.py + brain/books.py 搬进手机。
-/// - 导入 txt（UTF-8 / GBK），按「第 X 章 / Chapter X / 卷」切章；切不出来每 3000 字一段。正文是一个文件，章只记起止（UTF-16 下标）。
+/// - 导入 txt（UTF-8 / UTF-16 / GBK / Big5），按「第 X 章 / Chapter X / 卷」切章；切不出来每 3000 字一段。正文是一个文件，章只记起止（UTF-16 下标）。
 /// - 页边：划线、批注、往来（parent_id 挂在线头底下）。author = "user" 或联系人编号。
 /// - 「划线说两句」：那句带着 book_mark_id 发进聊天，线头挂在窗口上，它接下来半小时的回话抄一份进页边。
 /// - 它知道 TA 在读哪（〔在读〕，3 分钟内翻过页才有）；工具 book 能翻到 TA 那一页、在页边留一笔（每天最多 3 笔，不剧透）。
@@ -194,7 +194,7 @@ enum LocalBooks {
         var title = (form.fields["title"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = f.name.lowercased()
         guard lower.hasSuffix(".txt") || lower.hasSuffix(".text") || !title.isEmpty else { return .error(400, String(localized: "先只认 txt")) }
-        guard var text = decode(f.data) else { return .error(400, String(localized: "这个文件读不出来（只认 UTF-8 和 GBK 的 txt）")) }
+        guard var text = decode(f.data) else { return .error(400, String(localized: "这个文件读不出来（试过 UTF-8、UTF-16、GBK、Big5 都不对）")) }
         text = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .error(400, String(localized: "这本书是空的")) }
@@ -211,11 +211,8 @@ enum LocalBooks {
         return .json(publicOut(s, b), status: 201)
     }
 
-    static func decode(_ d: Data) -> String? {
-        if let t = String(data: d, encoding: .utf8) { return t }
-        let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
-        return String(data: d, encoding: String.Encoding(rawValue: gb))
-    }
+    /// 跟世界书同一个：BOM / UTF-16、UTF-8（混几个坏字节也读）、GBK、Big5（10-16 内测：网盘下的 txt 读不进）
+    static func decode(_ d: Data) -> String? { LoreImport.decodeText(d) }
 
     private static let head = try! NSRegularExpression(
         pattern: #"^\s*(第[零〇一二三四五六七八九十百千万两0-9]{1,8}[章节回卷部集篇][^\n]{0,40}|(?:Chapter|CHAPTER)\s+[0-9IVXLCivxlc]+\b[^\n]{0,60}|卷[零〇一二三四五六七八九十0-9]{1,4}[^\n]{0,30}|序[章言]?|楔子|尾声|后记|番外[^\n]{0,30})\s*$"#,

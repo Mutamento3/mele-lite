@@ -1,6 +1,9 @@
 import UniformTypeIdentifiers
 import PhotosUI
 import SwiftUI
+#if LITE
+import MeleLiteCore
+#endif
 
 // MARK: - TA 的设定（第二块第 10 步）
 //
@@ -411,11 +414,15 @@ struct CompanionSettingsView: View {
         }
     }
 
-    /// txt 先按 UTF-8 读，不行再按 GB18030（中文 Windows 存的 txt 常是 GBK）
+    /// txt 读法跟世界书同一个（BOM / UTF-16 / 坏几个字节的 UTF-8 / GBK / Big5）
     static func decodeText(_ data: Data) -> String? {
+        #if LITE
+        return LoreImport.decodeText(data)
+        #else
         if let s = String(data: data, encoding: .utf8) { return s }
         let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
         return String(data: data, encoding: String.Encoding(rawValue: gb))
+        #endif
     }
 
     private var who: some View {

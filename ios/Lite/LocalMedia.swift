@@ -85,7 +85,7 @@ enum LocalMedia {
         return text
     }
 
-    /// 历史里一张图怎么写（模型看不见图时）
+    /// 历史里一张图怎么写（看不见图的模型每张都用；看得见的、不是这一轮的那几张也用）
     static func photoLine(_ caption: String, zh: Bool) -> String {
         caption.isEmpty ? (zh ? "〔发了一张照片，还没看清是什么〕" : "〔Sent a photo — not described yet〕")
                         : (zh ? "〔发了一张照片：\(caption)〕" : "〔Sent a photo: \(caption)〕")

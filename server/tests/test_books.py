@@ -131,3 +131,14 @@ async def test_book_only_for_one_companion(pool, tmp_path):
     assert await BK.reading_line(pool, acc, now, "zh", b) == ""
     assert (await BK.share_with(pool, acc, book.id, None)).companion_id is None
     assert (await BK.get(pool, acc, book.id, b)).id == book.id
+
+
+def test_decode_utf16_and_a_few_bad_bytes():
+    """10-16 内测：网盘下的 txt 读不进——UTF-16 和混了坏字节的 UTF-8 都要读得出"""
+    from brain.books import decode
+    raw = bytearray(("第一章 灯塔\n北边的旧灯塔亮了一夜。\n" * 200).encode())
+    raw.insert(3000, 0xFF)
+    assert decode(bytes(raw)).startswith("第一章 灯塔")
+    assert decode(b"\xff\xfe" + "灯塔".encode("utf-16-le")) == "灯塔"
+    assert decode("lighthouse".encode("utf-16-le")) == "lighthouse"
+    assert decode("北边的旧灯塔".encode("gb18030")) == "北边的旧灯塔"

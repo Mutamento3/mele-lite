@@ -77,6 +77,19 @@ import Testing
         #expect(try LoreImport.parse(bare, fileName: "w.txt", charName: "", userName: "", lang: .en).entries.first?.content == "the old one up north")
     }
 
+    @Test func utf8WithAFewBadBytes() throws {
+        // 网盘下的小说：整本 UTF-8，中间混了一个坏字节（10-16 内测）——照 UTF-8 读，不能当 GBK 读成乱码
+        var d = Data(String(repeating: "第一章 灯塔\n北边的旧灯塔亮了一夜。\n", count: 200).utf8)
+        d.insert(0xFF, at: 3000)
+        let t = try #require(LoreImport.decodeText(d))
+        #expect(t.hasPrefix("第一章 灯塔") && t.contains("\u{FFFD}"))
+        // 真 GBK 的照旧按 GBK
+        let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
+        #expect(LoreImport.decodeText("北边的旧灯塔".data(using: String.Encoding(rawValue: gb))!) == "北边的旧灯塔")
+        // UTF-8 带 BOM 的不留 BOM
+        #expect(LoreImport.decodeText(Data([0xEF, 0xBB, 0xBF]) + Data("灯塔".utf8)) == "灯塔")
+    }
+
     @Test func numberedList() throws {
         // 前面两小段 1. 2. 3. 是写给模型的规则，后面是一长串编号的词条
         var lines = ["## 用法", "1. **偶尔用，别每句都用**", "", "2. **看场合**", "", "3. **别照抄**", "",

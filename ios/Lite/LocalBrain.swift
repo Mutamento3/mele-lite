@@ -428,10 +428,21 @@ final class LocalBrain: @unchecked Sendable {
         }
         let voiceNotes = Dictionary(host.store.collection("attachments").filter { ($0["kind"] as? String) == "voice" }
             .compactMap { a in (a["id"] as? String).map { ($0, a["caption"] as? String ?? "") } }, uniquingKeysWith: { a, _ in a })
-        // 照片（10-15）：看不见图的模型在历史里看描述；看得见的只有它画的图写一句（它自己发过什么）
-        let photoNotes = Dictionary(host.store.collection("attachments").filter {
-            ($0["kind"] as? String) == "image" && !(($0["name"] as? String ?? "").hasPrefix("sticker-")) && (!sees || ($0["drawn"] as? Bool ?? false))
-        }.compactMap { a in (a["id"] as? String).map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
+        // 照片（10-15）：看不见图的模型在历史里看描述。
+        // 10-16 内测「读不到前两轮发的图」：看得见的模型原图只在发的那一轮给，之后历史里连一句「发过照片」都没有——
+        // 现在前几轮的照片也写〔发了一张照片：描述〕（没描述的最近 3 张先补写，写过存在附件上，只写一次）；这一轮那张照旧给原图
+        let isPhoto: ([String: Any]) -> Bool = { ($0["kind"] as? String) == "image" && !(($0["name"] as? String ?? "").hasPrefix("sticker-")) }
+        let shownNow: String? = sees ? images.first { id in host.store.collection("attachments").first { ($0["id"] as? String) == id }.map(isPhoto) ?? false } : nil
+        if sees {
+            let past = Set(stored.flatMap { $0["attachments"] as? [String] ?? [] }).subtracting(images)
+            let blank = host.store.collection("attachments").filter {
+                isPhoto($0) && past.contains($0["id"] as? String ?? "") && ($0["caption"] as? String ?? "").isEmpty && !($0["drawn"] as? Bool ?? false)
+            }.compactMap { $0["id"] as? String }
+            let recent = stored.reversed().flatMap { ($0["attachments"] as? [String] ?? []).reversed() }.filter(blank.contains)
+            for id in recent.prefix(3) { _ = await LocalMedia.describe(host, attachment: id, zh: zh) }
+        }
+        let photoNotes = Dictionary(host.store.collection("attachments").filter { isPhoto($0) && ($0["id"] as? String) != shownNow }
+            .compactMap { a in (a["id"] as? String).map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
         // 上一轮它做过的事（立里程碑、抽牌、发表情包、记账……）：存下来的正文把标记洗掉了，卡片又不进上下文，
         // 它会忘了自己做过、下一轮再做一遍（10-05 真 key 测出来：同一座里程碑连立三轮）。照服务器 TOOLS_HEAD 垫在下一句前面
         var pendingDeeds = ""
@@ -499,10 +510,10 @@ final class LocalBrain: @unchecked Sendable {
         let lore = LocalRooms.loreEntries(host.store, companion: comp["id"] as? String ?? "")
         let hits = LoreMatcher.hits(entries: lore, recent: history, contactID: contact.id)
         let stickers = LocalRooms.stickersForPrompt(host.store)
-        let image = !sees ? nil : images.lazy.compactMap { id -> Data? in
+        let image = shownNow.flatMap { id -> Data? in
             guard let d = try? Data(contentsOf: self.host.store.fileURL("att-\(id)")), let img = UIImage(data: d) else { return nil }
             return Self.jpeg(img, maxSide: 1280)
-        }.first
+        }
         // 有回声兜着，原文留长一点（到记性长度就卷）；卷不动的时候最多 12 万字，别让一轮贵得离谱
         var req = Prompt.build(PromptInput(contact: contact, identity: identity, history: history, loreHits: hits,
                                            stickers: stickers, peekResult: peek, lang: zh ? .zh : .en, currentImage: image),

@@ -72,12 +72,35 @@ def _row(r) -> Book:
 
 
 def decode(data: bytes) -> str:
-    for enc in ("utf-8-sig", "gb18030"):
+    """跟 App 世界书同一套（LoreImport.decodeText）：BOM → 没 BOM 的 UTF-16 → UTF-8 → 坏字节极少的 UTF-8 → GBK → Big5。
+    10-16 内测：网盘下的小说 txt 读不进——UTF-8 里混了几个坏字节就整本被拒（再按 GBK 读要么报错要么乱码）"""
+    for bom, enc in ((b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                     (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if data.startswith(bom):
+            try:
+                return data[len(bom):].decode(enc)
+            except UnicodeDecodeError:
+                break
+    head = data[:4096]
+    zero_odd, zero_even = head[1::2].count(0), head[0::2].count(0)
+    if len(head) >= 4 and max(zero_odd, zero_even) * 4 >= len(head) // 2:
+        try:
+            return data.decode("utf-16-le" if zero_odd >= zero_even else "utf-16-be")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    loose = data.decode("utf-8-sig", errors="replace")
+    if loose.count("\ufffd") * 100 <= len(loose):
+        return loose
+    for enc in ("gb18030", "big5hkscs"):
         try:
             return data.decode(enc)
         except UnicodeDecodeError:
             continue
-    raise BookError("这个文件读不出来（只认 UTF-8 和 GBK 的 txt）")
+    raise BookError("这个文件读不出来（试过 UTF-8、UTF-16、GBK、Big5 都不对）")
 
 
 def split(text: str) -> list[list]:

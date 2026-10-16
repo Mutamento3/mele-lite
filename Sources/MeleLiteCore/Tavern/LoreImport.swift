@@ -43,9 +43,16 @@ public enum LoreImport {
         let zeroEven = stride(from: 0, to: bytes.count, by: 2).filter { bytes[$0] == 0 }.count
         if bytes.count >= 4, max(zeroOdd, zeroEven) * 4 >= bytes.count / 2,
            let s = String(data: data, encoding: zeroOdd >= zeroEven ? .utf16LittleEndian : .utf16BigEndian) { return s }
-        if let s = String(data: data, encoding: .utf8) { return s }
+        if let s = String(data: data, encoding: .utf8) { return dropBOM(s) }
+        // 10-16 内测：百度网盘下的小说 txt 读不进书架——UTF-8 里混了几个坏字节（下载截断 / 拼接），整本被拒，
+        // 再按 GBK 读就是满屏乱码。坏的极少（百分之一以内；一个坏字节会拆出好几个 �）就当 UTF-8，坏字节换成 �
+        let loose = String(decoding: data, as: UTF8.self)
+        let bad = loose.unicodeScalars.lazy.filter { $0 == "\u{FFFD}" }.count
+        if bad * 100 <= loose.count { return dropBOM(loose) }
         let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
-        return String(data: data, encoding: String.Encoding(rawValue: gb))
+        if let s = String(data: data, encoding: String.Encoding(rawValue: gb)) { return s }
+        let big5 = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5_HKSCS_1999.rawValue))
+        return String(data: data, encoding: String.Encoding(rawValue: big5))
     }
 
     static func dropBOM(_ s: String) -> String { s.hasPrefix("\u{FEFF}") ? String(s.dropFirst()) : s }
