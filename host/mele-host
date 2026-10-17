@@ -22,11 +22,13 @@ case "${1:-help}" in
           echo "更新好了。现在的版本："; sleep 3; docker compose exec -T mele printenv NEWAPP_BUILD || echo "（起来以后 mele-host status 能看）" ;;
   memory) shift; memory "$@" ;;
   tunnel) shift; tunnel "$@" ;;
+  backup) backup ;;
+  restore) shift; restore "$@" ;;
   logs)   docker compose logs -f --tail 200 "${2:-mele}" ;;
   stop)   docker compose stop ;;
   start)  docker compose up -d ;;
   key)    echo "$MASTER_KEY" ;;
-  *) echo "用法：mele-host pair | status | update | logs | stop | start | key | tunnel on|off|status | memory off|status" ;;
+  *) echo "用法：mele-host pair | status | update | logs | stop | start | key | backup | restore 文件 | tunnel on|off|status | memory off|status" ;;
 esac
 }
 
@@ -128,6 +130,91 @@ ts_name() {   # 这台电脑在 Tailscale 里的名字（没装 / 没登录就�
   command -v tailscale >/dev/null 2>&1 || return 0
   tailscale status --json 2>/dev/null \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true
+}
+
+# 整台备份（10-17 内测：连 Host 的人手机上的一键备份不带聊天）。一个 .tar.gz 里：
+#   mele.dump（数据库：聊天、记忆、设定、TA 们……）、mele_memory.dump（装过独立记忆库才有）、
+#   data.tar.gz（照片、头像、贴纸这些文件；记忆模型 hf/ 不带，2GB 多，新机器装的时候自己会下）、
+#   env（.env 原样：主密钥解得开存着的模型 key，SECRET 让手机的配对凭证还认）——所以这个文件别给别人。
+# 放在同一台服务器上不算备份：服务器没了它也没了。下载到自己电脑上。
+backup() {
+  local dir=${MELE_BACKUP_DIR:-$PWD/backups} tmp out
+  docker compose exec -T db pg_isready -U mele -d mele >/dev/null 2>&1 || { echo "数据库没在跑：先 mele-host start"; exit 1; }
+  docker compose exec -T mele true >/dev/null 2>&1 || { echo "Host 没在跑：先 mele-host start"; exit 1; }
+  mkdir -p "$dir"
+  tmp=$(mktemp -d)
+  out="$dir/mele-backup-$(date +%Y%m%d-%H%M).tar.gz"
+  echo "▸ 导出数据库"
+  docker compose exec -T db pg_dump -U mele -Fc mele > "$tmp/mele.dump"
+  if docker compose exec -T db psql -U mele -d mele -tAc "SELECT 1 FROM pg_database WHERE datname = 'mele_memory'" | grep -q 1; then
+    docker compose exec -T db pg_dump -U mele -Fc mele_memory > "$tmp/mele_memory.dump"
+  fi
+  echo "▸ 打包照片和文件（记忆模型不带）"
+  docker compose exec -T mele tar czf - -C /data --exclude=./hf . > "$tmp/data.tar.gz"
+  cp .env "$tmp/env"
+  docker compose exec -T mele printenv NEWAPP_BUILD > "$tmp/build" 2>/dev/null || true
+  (umask 077; tar czf "$out" -C "$tmp" .)
+  rm -rf "$tmp"
+  local size ip
+  size=$(du -h "$out" | cut -f1)
+  ip=$(curl -fsS4 -m 5 https://api.ipify.org 2>/dev/null || echo 这台服务器的IP)
+  cat <<DONE
+✅ 备份好了（$size）：$out
+
+⚠️  里面有主密钥，别发给别人。放在这台服务器上不算备份——在你自己电脑的终端里跑这句下载下来：
+    scp root@$ip:$out .
+
+恢复（这台，或者新装好的一台）：mele-host restore 备份文件
+DONE
+}
+
+# 用备份整个换掉这台 Host 的数据。地址、端口、数据库密码用这台自己的；主密钥和 SECRET 用备份里的
+# （不然存着的模型 key 解不开、手机的凭证不认）。搬到新服务器：先在新机器上 install.sh，再 restore。
+restore() {
+  local file=${1:-} tmp ans
+  [ -n "$file" ] && [ -f "$file" ] || { echo "用法：mele-host restore mele-backup-xxxx.tar.gz"; exit 1; }
+  tmp=$(mktemp -d)
+  tar xzf "$file" -C "$tmp" || { rm -rf "$tmp"; echo "解不开这个文件，可能没传完"; exit 1; }
+  if [ ! -f "$tmp/mele.dump" ] || [ ! -f "$tmp/data.tar.gz" ] || [ ! -f "$tmp/env" ]; then
+    rm -rf "$tmp"; echo "这不是 mele-host backup 打出来的备份"; exit 1
+  fi
+  if [ "${2:-}" != "--yes" ]; then
+    echo "恢复会用备份里的东西整个换掉这台 Host 现在的聊天、记忆、照片，现在的找不回来。"
+    read -r -p "确定就打 yes：" ans </dev/tty || ans=""
+    [ "$ans" = yes ] || { rm -rf "$tmp"; echo "没动。"; exit 1; }
+  fi
+  echo "▸ 停下 Host"
+  docker compose stop mele >/dev/null
+  [ "${COMPOSE_PROFILES:-}" != "memory" ] || docker compose stop memory >/dev/null
+  docker compose up -d db >/dev/null 2>&1
+  for _ in $(seq 1 30); do docker compose exec -T db pg_isready -U mele -d postgres >/dev/null 2>&1 && break; sleep 2; done
+  echo "▸ 换数据库"
+  local db
+  for db in mele mele_memory; do
+    [ -f "$tmp/$db.dump" ] || continue
+    docker compose exec -T db psql -U mele -d postgres -qc "DROP DATABASE IF EXISTS $db WITH (FORCE)" -c "CREATE DATABASE $db"
+    docker compose exec -T db pg_restore -U mele -d "$db" --no-owner --exit-on-error < "$tmp/$db.dump" \
+      || { rm -rf "$tmp"; echo "数据库没恢复成功，上面是报错。这台的数据已经清掉了，修好以后再跑一次 restore。"; exit 1; }
+  done
+  echo "▸ 换照片和文件"
+  docker compose run --rm --no-deps -T --entrypoint sh mele \
+    -c 'cd /data && find . -mindepth 1 -maxdepth 1 ! -name hf -exec rm -rf {} + && tar xzf -' < "$tmp/data.tar.gz"
+  local k v
+  for k in MASTER_KEY SECRET; do
+    v=$(sed -n "s/^$k=//p" "$tmp/env" | head -1)
+    [ -z "$v" ] || setenv "$k" "$v"
+  done
+  rm -rf "$tmp"
+  echo "▸ 重新启动"
+  docker compose up -d >/dev/null 2>&1
+  local ok=""
+  for _ in $(seq 1 60); do
+    docker compose exec -T mele python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)" >/dev/null 2>&1 && { ok=1; break; }
+    sleep 3
+  done
+  [ -n "$ok" ] || { echo "Host 没起来，看日志：mele-host logs"; exit 1; }
+  echo "✅ 恢复好了：https://$MELE_DOMAIN"
+  echo "手机连的地址跟以前不一样的话，App 里重新配对：mele-host pair"
 }
 
 memory() {

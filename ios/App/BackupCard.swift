@@ -63,6 +63,7 @@ struct BackupCard: View {
             if let failure {
                 Text(failure).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red.opacity(0.8))
             }
+            if Lite.hosted { HostExportRows() }
 
             // 删 TA 前自动留的（10-11）
             if !autos.isEmpty {
@@ -171,6 +172,77 @@ struct BackupCard: View {
         switch result {
         case .success(let s): restored = s
         case .failure(let e): failure = (e as? LocalizedError)?.errorDescription ?? e.localizedDescription
+        }
+    }
+}
+
+/// 连着 Host 时（10-17 内测）：聊天在服务器上，上面那个一键备份带不走。这里从 Host 拿：
+/// 所有 TA 的聊天各一份 md（给人看），和 Host 的 /me/export 整包 JSON（聊天、记忆、设定都在，留底）。
+/// 真要整台恢复的备份在服务器上：mele-host backup。
+private struct HostExportRows: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var theme: AppTheme
+    @State private var busy: String?
+    @State private var files: ShareFiles?
+    @State private var note: String?
+
+    struct ShareFiles: Identifiable {
+        let urls: [URL]
+        var id: String { urls.map(\.path).joined() }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().padding(.vertical, 2)
+            Text("Host 上的聊天").font(Typo.sans(Typo.Size.body, .semibold)).foregroundStyle(theme.ink)
+            Hint(text: String(localized: "聊天存在你的 Host 上，上面的备份不带它们。从这里导出来存一份；想整台服务器都能恢复，在服务器上运行 mele-host backup。"))
+            row("导出所有 TA 的聊天", "每个 TA 一份 md，打开就能看", key: "md") { await exportChats() }
+            row("导出 Host 上的全部数据", "聊天、记忆、设定打成一个 JSON 留底（钥匙只有后 4 位）", key: "json") { await exportAll() }
+            if let note { Text(note).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red.opacity(0.8)) }
+        }
+        .sheet(item: $files) { f in ActivityView(items: f.urls) }
+    }
+
+    private func row(_ title: String, _ sub: String, key: String, _ run: @escaping () async -> Void) -> some View {
+        Button { Task { busy = key; note = nil; await run(); busy = nil } } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                    Hint(text: sub)
+                }
+                Spacer()
+                if busy == key { ProgressView() }
+                else { Image(systemName: "square.and.arrow.up").font(Typo.icon(14)).foregroundStyle(theme.inkFaint) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(busy != nil)
+    }
+
+    private func exportChats() async {
+        let me = model.profile?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var urls: [URL] = []
+        do {
+            for c in model.companions {
+                urls.append(try await ChatExport.markdown(api: model.api, companion: c,
+                                                          myName: me.isEmpty ? String(localized: "我") : me))
+            }
+            if urls.isEmpty { note = String(localized: "还没有 TA") } else { files = ShareFiles(urls: urls) }
+        } catch {
+            note = String(localized: "没导出来：\(error.localizedDescription)")
+        }
+    }
+
+    private func exportAll() async {
+        do {
+            let data = try await model.api.data("me/export")
+            let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(String(localized: "Mele Host 数据 \(day).json"))
+            try data.write(to: url)
+            files = ShareFiles(urls: [url])
+        } catch {
+            note = String(localized: "没导出来：\(error.localizedDescription)")
         }
     }
 }

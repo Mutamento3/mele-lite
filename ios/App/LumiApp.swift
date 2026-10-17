@@ -74,6 +74,20 @@ private struct SignedIn: View {
                     #endif
                     #endif
                     await model.refresh()
+                    #if DEBUG
+                    // 导出聊天记录自测（10-17）：第一个 TA 导出成 md，拷进 Documents/chat-export-selftest.md
+                    if ProcessInfo.processInfo.arguments.contains("-chatExportSelfTest"), let c = model.companions.first {
+                        let model = model
+                        Task { do {   // 独立任务：这一页加载完就消失，跟着它跑会被取消
+                            let url = try await ChatExport.markdown(api: model.api, companion: c, myName: model.profile?.name ?? "我")
+                            let dst = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                                .appendingPathComponent("chat-export-selftest.md")
+                            try? FileManager.default.removeItem(at: dst)
+                            try FileManager.default.copyItem(at: url, to: dst)
+                            print("chatExportSelfTest ok:", url.lastPathComponent)
+                        } catch { print("chatExportSelfTest FAILED:", error) } }
+                    }
+                    #endif
                 }
                 .confirmationDialog(String(localized: "断开 Mele Host？"), isPresented: $leaveHost, titleVisibility: .visible) {
                     Button(String(localized: "断开"), role: .destructive) {

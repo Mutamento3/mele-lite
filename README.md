@@ -51,10 +51,14 @@ sudo tailscale funnel --bg 8080
 | `mele-host update` | 升级到最新版 |
 | `mele-host logs` | 看日志 |
 | `mele-host status` | 看在不在跑 |
+| `mele-host backup` | 整台备份成一个文件（聊天、记忆、照片、主密钥都在里面），记得下载到自己电脑上 |
+| `mele-host restore 文件` | 用备份整个恢复；搬到新服务器：先装好再 restore |
 | `mele-host tunnel on` / `off` / `status` | 开 / 关隧道模式（没有公网 IP 的电脑） |
 | `mele-host stop` / `start` | 停 / 开 |
 
 **推送怎么走**：苹果只让 App 的开发者推送，所以 Host 的推送会经过一个官方小中转（源码在 `relay/worker.js`）。Host 先用你手机给的钥匙把内容加密，中转只看得到「有一条要送到某台手机」，看不到内容。推送只送得到从 TestFlight 装的 Mele Lite；自己编译的 App 换了包名，苹果不让我们的中转推给它，其他功能照常。
+
+**备份**：连着 Host 时，聊天在服务器上，手机里的一键备份不带它们。App 的 Me → 备份 里可以把所有 TA 的聊天导成 md、或者把 Host 上的全部数据导成一个 JSON；想整台都能恢复，在服务器上跑 `mele-host backup`，再用 `scp` 把文件下载到自己电脑。备份文件里有主密钥，别发给别人。
 
 **出事了**：先 `mele-host logs` 看报错；服务器连不上时，App 会让你「断开 Host，先用本机」，修好以后 `mele-host pair` 重新连。这是个人项目，**不提供客服**；遇到问题欢迎在 GitHub 提 issue，但不保证回复。
 

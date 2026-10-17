@@ -283,6 +283,9 @@ struct CompanionSettingsView: View {
     @State private var wechatNote: String?
     @State private var readingTxt = false       // 性格从 txt / md 读进来（10-11 内测反馈）
     @State private var txtNote: String?
+    @State private var exportingChat = false     // 导出这个 TA 的聊天记录（10-17）
+    @State private var chatFile: ChatExport.File?
+    @State private var chatExportNote: String?
     let companion: CompanionDTO
 
     init(companion: CompanionDTO, api: APIClient) {
@@ -342,6 +345,7 @@ struct CompanionSettingsView: View {
         }
         .environment(\.colorScheme, .light)
         .task { await store.load(); customRel = customRelationship }
+        .sheet(item: $chatFile) { f in ActivityView(items: [f.url]) }
         .sheet(isPresented: $addingClock) {
             AddClockView { shape, spec, note in Task { await store.addClock(shape: shape, spec: spec, note: note) } }
                 .environment(\.colorScheme, .light)
@@ -354,6 +358,20 @@ struct CompanionSettingsView: View {
                 _ = try? await store.api.uploadAvatar(companion: companion.id, data: jpg)
                 await model.refresh()
             }
+        }
+    }
+
+    private func exportChat() async {
+        exportingChat = true
+        chatExportNote = nil
+        defer { exportingChat = false }
+        do {
+            let me = model.profile?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let url = try await ChatExport.markdown(api: store.api, companion: companion,
+                                                   myName: me.isEmpty ? String(localized: "我") : me)
+            chatFile = ChatExport.File(url: url)
+        } catch {
+            chatExportNote = String(localized: "没导出来：\(error.localizedDescription)")
         }
     }
 
@@ -730,6 +748,19 @@ struct CompanionSettingsView: View {
                 }
                 .buttonStyle(.plain)
             }
+            // 导出聊天记录（10-17 内测）：只要这一个 TA 的，拼成 md 交给分享面板（存到「文件」、发给自己都行）
+            Button { Task { await exportChat() } } label: {
+                HStack {
+                    row("导出聊天记录", "把跟 TA 的所有窗口存成一份能看的 md 文件。一键备份是整个 Mele 一起、只能整包恢复")
+                    Spacer()
+                    if exportingChat { ProgressView() }
+                    else { Image(systemName: "square.and.arrow.up").font(Typo.icon(14)).foregroundStyle(theme.inkFaint) }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(exportingChat)
+            if let chatExportNote { note(chatExportNote) }
             if Lite.local { note(linked ? "TA 每句话都会先去记忆库想一下，「联想」管想起多少。"
                                      : "接上记忆库，TA 每句话都会先去想一下；没接的话，Lite 记得的是最近的聊天和回声。") }
             Toggle(isOn: store.s("long_mode", false)) { row("长文模式", "回复整段发，不切成一条条") }
