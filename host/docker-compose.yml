@@ -54,11 +54,12 @@ services:
     image: caddy:2
     restart: unless-stopped
     depends_on: [mele]
+    # 隧道模式（10-17，`mele-host tunnel on`）：.env 里 MELE_SITE=:80、端口只绑本机 127.0.0.1:8080，不占 80/443、不签证书
     ports:
-      - "80:80"
-      - "443:443"
+      - "${MELE_HTTP_PORT:-80}:80"
+      - "${MELE_HTTPS_PORT:-443}:443"
     environment:
-      MELE_DOMAIN: ${MELE_DOMAIN}
+      MELE_SITE: ${MELE_SITE:-${MELE_DOMAIN}}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy:/data

@@ -90,3 +90,19 @@ import Testing
         #expect(InnerVoice.split(b2) == ("你先睡。", "舍不得"))
     }
 }
+
+/// 一个标记都没写、心里话混进正文开头（10-16）：跟 Host test_recover_untagged_10_16 同一组
+struct MonologueUntagged1016 {
+    @Test func recovers() {
+        let r = Monologue.recoverUntagged("她今天又熬夜了，我有点急。\n她嘴上说没事。\n你几点睡的？\n快去喝口水。", pronoun: "她", zh: true)
+        #expect(r.monologue == "她今天又熬夜了，我有点急。\n她嘴上说没事。" && r.body == "你几点睡的？\n快去喝口水。")
+        for keep in ["我刚吃完饭。\n你呢？", "她今天又熬夜了。", "*把她抱起来*\n你怎么这么轻", "你今天怎么样？\n她说得对。", "[独白]她累了[/独白]\n你先睡"] {
+            #expect(Monologue.recoverUntagged(keep, pronoun: "她", zh: true).monologue.isEmpty, "\(keep)")
+        }
+        #expect(Monologue.recoverUntagged("「你好」她今天说了三遍。\n你还记得吗", pronoun: "她", zh: true).monologue == "「你好」她今天说了三遍。")
+        #expect(Monologue.recoverUntagged("「她说你好」这句我记得。\n你还记得吗", pronoun: "她", zh: true).monologue.isEmpty)
+        let en = Monologue.recoverUntagged("She looks tired tonight.\nHey, did you eat?", pronoun: "she", zh: false)
+        #expect(en.monologue == "She looks tired tonight." && en.body == "Hey, did you eat?")
+        #expect(Monologue.recoverUntagged("They look tired.\nDid you eat?", pronoun: "they", zh: false).monologue.isEmpty)
+    }
+}

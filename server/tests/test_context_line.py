@@ -65,6 +65,16 @@ async def test_put_context_and_hook(pool):
         assert await C.load(pool, UUID((await c.get("/me")).json()["id"])) == {}
 
 
+async def test_hook_url_uses_public_url(pool, monkeypatch):
+    """Host 在 Caddy / 隧道后面：request 看到的是 http://，快捷指令要拿对外的 https 地址"""
+    monkeypatch.setenv("NEWAPP_PUBLIC_URL", "https://box.tail1234.ts.net/")
+    e = Env(pool)
+    t = await e.login()
+    async with e.client(t) as c:
+        assert (await c.get("/me/hook")).json()["url"] == "https://box.tail1234.ts.net/hooks/context"
+        assert (await c.post("/me/hook/reset")).json()["url"] == "https://box.tail1234.ts.net/hooks/context"
+
+
 async def test_turn_sees_their_side(pool):
     e = Env(pool, ["嗯嗯"])
     t = await e.login()

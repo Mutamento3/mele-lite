@@ -21,11 +21,12 @@ case "${1:-help}" in
           docker compose up -d && docker image prune -f >/dev/null
           echo "更新好了。现在的版本："; sleep 3; docker compose exec -T mele printenv NEWAPP_BUILD || echo "（起来以后 mele-host status 能看）" ;;
   memory) shift; memory "$@" ;;
+  tunnel) shift; tunnel "$@" ;;
   logs)   docker compose logs -f --tail 200 "${2:-mele}" ;;
   stop)   docker compose stop ;;
   start)  docker compose up -d ;;
   key)    echo "$MASTER_KEY" ;;
-  *) echo "用法：mele-host pair | status | update | logs | stop | start | key | memory on|off|status" ;;
+  *) echo "用法：mele-host pair | status | update | logs | stop | start | key | tunnel on|off|status | memory off|status" ;;
 esac
 }
 
@@ -52,10 +53,96 @@ setenv() {   # 在 .env 里设一行（有就改、没有就加）
   export "$1=$2"
 }
 
+# 隧道模式（10-17 内测）：Host 装在家里 / 学校、没有公网 IP 的电脑上，HTTPS 交给 Tailscale Funnel 或 Cloudflare Tunnel。
+# Caddy 不再签证书、不占 80/443，只在本机 127.0.0.1:8080 收纯 HTTP，隧道指过来就行。
+# 换了地址数据不丢：配对凭证跟 .env 里的 SECRET 走、不跟域名走，Host 永远只有一个主人账号；只是 App 得用新地址重新配一次对。
+# 端口被占了可以换：MELE_TUNNEL_PORT=9080 mele-host tunnel on
+tunnel() {
+  local port=${MELE_TUNNEL_PORT:-8080} domain
+  case "${1:-status}" in
+    on)
+      domain=$(bare_domain "${2:-}")
+      [ -n "$domain" ] || domain=$(ts_name)
+      if [ -z "$domain" ]; then
+        echo "用法：mele-host tunnel on 隧道给你的域名"
+        echo "  Tailscale 的在管理后台 Machines 里看，长这样：my-pc.tail1234.ts.net"
+        exit 1
+      fi
+      setenv MELE_DOMAIN "$domain"
+      setenv MELE_SITE ":80"
+      setenv MELE_HTTP_PORT "127.0.0.1:$port"
+      setenv MELE_HTTPS_PORT "127.0.0.1:$((port + 363))"
+      echo "▸ 切到隧道模式，重启 Host"
+      docker compose up -d
+      local ok=""
+      for _ in $(seq 1 30); do curl -fsS -m 3 "http://127.0.0.1:$port/version" >/dev/null 2>&1 && { ok=1; break; }; sleep 2; done
+      [ -n "$ok" ] || { echo "本机 http://127.0.0.1:$port 没起来，看日志：mele-host logs caddy"; exit 1; }
+      echo "✅ 本机这头好了：http://127.0.0.1:$port"
+      if curl -fsS -m 10 "https://$domain/version" >/dev/null 2>&1; then
+        echo "✅ 隧道也通了：https://$domain"
+      else
+        cat <<TIP
+
+接下来把隧道指到本机 $port 端口（选你用的那个）：
+  Tailscale：  sudo tailscale funnel --bg $port
+               第一次会给一个链接，点开在网页上同意开 Funnel
+  Cloudflare： 隧道的服务地址填 http://localhost:$port
+弄好以后浏览器打开 https://$domain/version 能看到一行字，就是通了。
+TIP
+      fi
+      cat <<NEXT
+
+App 里用新地址重新配一次对（以前的聊天、记忆都还在，配上还是原来那些）：
+  mele-host pair
+NEXT
+      ;;
+    off)
+      domain=$(bare_domain "${2:-}")
+      [ -n "$domain" ] || domain=$MELE_DOMAIN
+      case "$domain" in *.ts.net)
+        echo "关掉隧道以后 Host 要自己签 HTTPS，得有公网 IP 或者域名：mele-host tunnel off 你的域名"; exit 1 ;;
+      esac
+      sed -i.tmp '/^MELE_SITE=/d;/^MELE_HTTP_PORT=/d;/^MELE_HTTPS_PORT=/d' .env && rm -f .env.tmp
+      unset MELE_SITE MELE_HTTP_PORT MELE_HTTPS_PORT
+      setenv MELE_DOMAIN "$domain"
+      docker compose up -d
+      echo "回到 Host 自己签 HTTPS 了：https://$domain（80 / 443 端口要能从外面连进来）"
+      echo "地址变了的话，App 里重新配对：mele-host pair"
+      ;;
+    status)
+      if [ "${MELE_SITE:-}" = ":80" ]; then
+        echo "隧道模式：对外 https://$MELE_DOMAIN → 本机 http://${MELE_HTTP_PORT:-127.0.0.1:8080}"
+      else
+        echo "没开隧道模式，Host 自己签 HTTPS：https://$MELE_DOMAIN（开：mele-host tunnel on 你的隧道域名）"
+      fi
+      ;;
+    *) echo "用法：mele-host tunnel on [域名] | off [域名] | status" ;;
+  esac
+}
+
+bare_domain() {   # 粘过来的 https://xxx/ 也认
+  local d=${1#https://}; d=${d#http://}; printf '%s' "${d%%/*}"
+}
+
+ts_name() {   # 这台电脑在 Tailscale 里的名字（没装 / 没登录就空）
+  command -v tailscale >/dev/null 2>&1 || return 0
+  tailscale status --json 2>/dev/null \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true
+}
+
 memory() {
   case "${1:-status}" in
     on)
+      # 10-17：Host 自己就能把 TA 的记忆开给别的 AI 连（App 里 TA 设定 → 记性 →「让别的 AI 连上 TA 的记忆」），
+      # 不用再另装一份独立记忆库（多占 2GB 内存、记忆还分成两本）。真要独立那份：--standalone
+      if [ "${2:-}" != "--standalone" ] && [ "${3:-}" != "--standalone" ]; then
+        echo "不用装了：Host 本来就有记忆。想让别的 AI（比如 Claude）也连上 TA 的记忆，"
+        echo "在 App 里打开 TA 设定 → 记性 →「让别的 AI 连上 TA 的记忆」，生成地址贴过去就行。"
+        echo "（真要另装一份独立记忆库：mele-host memory on --standalone）"
+        return 0
+      fi
       local mem_mb force=${2:-}
+      [ "$force" = "--standalone" ] && force=${3:-}
       mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
       if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 5500 ] && [ "$force" != "--force" ]; then
         echo "内存只有 ${mem_mb}MB。记忆库要再多占 2～3GB，建议 6GB 以上，不然两个一起跑会被系统杀掉。"
@@ -94,7 +181,7 @@ memory() {
       if docker compose exec -T memory python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)" >/dev/null 2>&1
       then echo "记忆库开着，好的"; else echo "记忆库开着但没响应，看日志：mele-host logs memory"; fi
       ;;
-    *) echo "用法：mele-host memory on | off | status" ;;
+    *) echo "用法：mele-host memory off | status" ;;
   esac
 }
 

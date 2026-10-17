@@ -134,7 +134,7 @@ class LoopResult:
 
 
 async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lang: str,
-                    max_rounds: int = TOOL_ROUNDS_MAX) -> LoopResult:
+                    max_rounds: int = TOOL_ROUNDS_MAX, untagged: str = "") -> LoopResult:
     """调模型；它要调工具就执行、把结果还给它、接着调。看的是回复里有没有工具请求，不看它自报的停下原因。
     最多 max_rounds 个来回：最后一个来回的结果里告诉它「次数用完了」，再调一次就收尾。"""
     total = Usage()
@@ -150,6 +150,8 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
         if reply.thinking.strip():
             thinking.append(reply.thinking.strip())
         mono, said = monologue.split_monologue(reply.text)    # 手写独白：切下来当思考链；调工具前那一段也要切
+        if not mono and untagged:                              # 一个标记都没写、心里话混进正文开头（10-16）
+            mono, said = monologue.recover_untagged(said, untagged, lang == "zh")
         if mono:
             thinking.append(mono)
         if not reply.tool_calls:
@@ -481,6 +483,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
 
     chat_info = lookup(route.chat_model)
     mode = monologue.effective_mode(settings, chat_info)
+    untagged = ((monologue._ZH_PRONOUN.get(settings.user_pronoun, "TA") if lang == "zh" else settings.user_pronoun)
+                if mode == "monologue" and group is None else "")
     if wake and mode == "monologue":
         head, _, rest = wake.partition("\n")          # 放在〔醒来〕那一行后面、最前面
         wake = f"{head}\n{monologue_note(lang, wake)}\n{rest}"
@@ -590,7 +594,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     started = time.monotonic()                   # 「思考了 x 秒」：从开口到说完（含中间调工具）
     out, err = None, None
     try:
-        out = await tool_loop(adapter, req, ctx, emit, lang)
+        out = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged)
     except LLMError as e:
         err = e
     if err is not None and context_full(err):
@@ -607,7 +611,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                                         lang, settings.user_name))
             req = build_request(parts, model=route.chat_model, thinking=mode == "native", user_tag=user_tag(acc), lang=lang)
             try:
-                out, err = await tool_loop(adapter, req, ctx, emit, lang), None
+                out, err = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged), None
             except LLMError as e:
                 err = e
         if err is not None and rolled:

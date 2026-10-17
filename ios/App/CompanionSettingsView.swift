@@ -682,6 +682,7 @@ struct CompanionSettingsView: View {
         Tile {
             // 接 MCP（10-04）：Lite 能接用户自己部署的记忆库；接上了「联想」就亮
             if Lite.on { MemoryLinkRows(store: store, hosted: !Lite.local) }
+            if Lite.hosted { ShareMemoryRows(store: store) }      // 让别的 AI 连上 TA 的记忆（10-16，Host）
             let linked = Lite.local && store.settings["memory_server"] is String
             Group {
                 if linked { recallPicker } else { recallPicker.needsHost(note: false) }

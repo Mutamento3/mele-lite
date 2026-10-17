@@ -32,6 +32,15 @@ curl -fsSL https://raw.githubusercontent.com/aporia-and-poros/mele-lite/main/hos
 
 装完屏幕上有一个二维码：手机相机扫一下，或者在 App 的 Me → Mele Host 里手动填地址和配对码。有自己的域名的话，先把域名解析到这台服务器，再用 `MELE_DOMAIN=你的域名` 跑上面那条。
 
+**装在家里 / 学校的电脑上（没有公网 IP）**：用隧道模式，HTTPS 交给 [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) 或 Cloudflare Tunnel，Host 只在本机 `127.0.0.1:8080` 收转进来的请求。电脑先装好 Tailscale 并登录，然后：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aporia-and-poros/mele-lite/main/host/install.sh | MELE_TUNNEL=1 bash
+sudo tailscale funnel --bg 8080
+```
+
+已经装过的：`mele-host update` 之后 `mele-host tunnel on 你的隧道域名`（Tailscale 的长这样：`my-pc.tail1234.ts.net`）。换了地址聊天和记忆都还在，App 里用新地址重新配一次对就好。这台电脑关机或睡着，TA 也就睡了；隧道在国内可能不稳，最稳的还是租一台有公网 IP 的服务器。
+
 **⚠️ 主密钥**：装完会打出一串「主密钥」，现在就抄下来放好。它加密你存在服务器上的模型 key，丢了就全解不开。以后随时看：`mele-host key`。
 
 **常用命令**
@@ -42,6 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/aporia-and-poros/mele-lite/main/hos
 | `mele-host update` | 升级到最新版 |
 | `mele-host logs` | 看日志 |
 | `mele-host status` | 看在不在跑 |
+| `mele-host tunnel on` / `off` / `status` | 开 / 关隧道模式（没有公网 IP 的电脑） |
 | `mele-host stop` / `start` | 停 / 开 |
 
 **推送怎么走**：苹果只让 App 的开发者推送，所以 Host 的推送会经过一个官方小中转（源码在 `relay/worker.js`）。Host 先用你手机给的钥匙把内容加密，中转只看得到「有一条要送到某台手机」，看不到内容。推送只送得到从 TestFlight 装的 Mele Lite；自己编译的 App 换了包名，苹果不让我们的中转推给它，其他功能照常。

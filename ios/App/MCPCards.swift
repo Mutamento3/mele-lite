@@ -592,3 +592,67 @@ struct MemoryLinkRows: View {
         }
     }
 }
+
+// MARK: - TA 设定「记性」里：让别的 AI 连上 TA 的记忆（10-16，只在连 Host 时）
+
+/// 像 OB 那样：一份记忆、几家一起连（Aporia 10-16）。Host 给这个 TA 开一个 MCP 地址，
+/// Claude 桌面版 / claude.ai 的自定义连接器填进去，连的就是 TA 在 Mele 里用的同一本。
+/// 接口 GET / POST / DELETE companions/{id}/memory-link（server/api/routes_memory_link.py）；旧 Host 没有就不显示
+struct ShareMemoryRows: View {
+    @EnvironmentObject private var theme: AppTheme
+    @ObservedObject var store: CompanionSettingsStore
+    @State private var url: String?
+    @State private var available = false
+    @State private var busy = false
+    @State private var copied = false
+    @State private var confirmReset = false
+
+    struct Link: Decodable { let url: String? }
+    private var path: String { "companions/\(store.companionID.uuidString.lowercased())/memory-link" }
+
+    var body: some View {
+        Group {
+            if available {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("让别的 AI 连上 TA 的记忆").font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
+                    Text("Claude 这类会接 MCP 的 AI 填下面的地址，连上的就是 TA 在这里用的同一本记忆：那边记的这边也知道。")
+                        .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                    if let url {
+                        Text(url).font(Typo.number(Typo.Size.caption, .regular)).foregroundStyle(theme.inkDim)
+                            .textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+                        HStack(spacing: 18) {
+                            Button(copied ? String(localized: "复制好了") : String(localized: "复制地址")) {
+                                UIPasteboard.general.string = url
+                                copied = true
+                            }
+                            Button("换一个") { confirmReset = true }
+                            Button("关掉", role: .destructive) { Task { await send("DELETE") } }
+                        }
+                        .font(Typo.sans(Typo.Size.callout, .semibold)).foregroundStyle(theme.accentDeep)
+                        Text("Claude：设置 → 连接器 → 添加自定义连接器，名字随便起，地址贴进去。这个地址就是钥匙，别发给别人；换一个，旧的马上失效。")
+                            .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                    } else {
+                        Button(busy ? String(localized: "生成中…") : String(localized: "生成地址")) { Task { await send("POST") } }
+                            .font(Typo.sans(Typo.Size.callout, .semibold)).foregroundStyle(theme.accentDeep)
+                            .disabled(busy)
+                    }
+                }
+                .confirmationDialog("换一个地址？", isPresented: $confirmReset, titleVisibility: .visible) {
+                    Button("换") { Task { await send("POST") } }
+                    Button("取消", role: .cancel) {}
+                } message: { Text("旧地址马上失效，连着它的 AI 要换成新地址。") }
+            }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        if let l: Link = try? await store.api.call("GET", path) { url = l.url; available = true }
+    }
+
+    private func send(_ method: String) async {
+        busy = true
+        defer { busy = false }
+        if let l: Link = try? await store.api.call(method, path) { url = l.url; copied = false }
+    }
+}

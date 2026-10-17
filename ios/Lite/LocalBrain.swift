@@ -769,7 +769,10 @@ final class LocalBrain: @unchecked Sendable {
 
         text = ModelNoise.strip(text)                   // 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
         // 独白切下来当思考，正文才发出去、才进历史。没选手写独白也切（10-12 内测：人设 / 旧历史里有标签，模型照写，[/独白] 漏进气泡）
-        let (mono, body) = Monologue.split(text)
+        var (mono, body) = Monologue.split(text)
+        if mono.isEmpty, monologue, group == nil {      // 一个标记都没写、心里话混进正文开头（10-16 内测）
+            (mono, body) = Monologue.recoverUntagged(body, pronoun: pronoun, zh: zh)
+        }
         if !mono.isEmpty { thinking += (thinking.isEmpty ? "" : "\n\n") + mono }
         text = body
         var innerVoiceText = ""                         // 心声（10-11）：最后那段切下来，不进气泡、不念；没开也切掉，只是不发卡

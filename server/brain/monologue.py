@@ -68,6 +68,40 @@ def split_monologue(text: str) -> tuple[str, str]:
     return "\n\n".join(monos), body
 
 
+_QUOTED = re.compile(r"「[^」]*」|“[^”]*”|\"[^\"]*\"")
+_YOU_EN = re.compile(r"\byou(r|rs|rself)?\b", re.I)
+
+
+def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
+    """一个标记都没写、心里话直接混进正文开头（10-16 内测）。开着手写独白时才用：
+    开头几行一个「你」都没有（引号里的不算）、提到 TA 用的是 pronoun（她 / 他 / TA；英文 she / he），
+    后面还有对 TA 说「你」的正文，就把开头那几行当独白；*动作* 开头的行不算。认不准原样不动。
+    漏的那段不进气泡、不进历史，它下一轮就看不到自己漏过的样子（Poros 10-15 那次的思路）。跟 Monologue.recoverUntagged 同一个"""
+    none = ("", text)
+    if _TAG.search(text or "") or not pronoun or (not zh and pronoun.lower() not in ("she", "he")):
+        return none
+    you = _SAYS_YOU if zh else _YOU_EN
+    lines = text.split("\n")
+    cut, mentions = 0, False
+    for i, line in enumerate(lines):
+        t = line.strip()
+        if not t:
+            continue
+        plain = _QUOTED.sub("", t)
+        if you.search(plain):
+            cut = i
+            break
+        if t.startswith(("*", "＊")):
+            return none
+        if (pronoun in plain) if zh else re.search(rf"\b{re.escape(pronoun)}\b", plain, re.I):
+            mentions = True
+        cut = i + 1
+    if not mentions or cut == 0 or cut >= len(lines) or not any(x.strip() for x in lines[cut:]):
+        return none
+    mono, body = "\n".join(lines[:cut]).strip(), "\n".join(lines[cut:]).strip()
+    return (mono, body) if mono else none
+
+
 _CLOSE_SHAPE = re.compile(rf"^{_L}\s*(?:/|end\s)|(?:/|完|结束|結束|end)\s*{_R}$", re.I)
 
 

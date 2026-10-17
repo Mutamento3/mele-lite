@@ -873,3 +873,10 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_name TEXT NOT NULL DE
 -- occasional = 不等说到关键词，隔几轮随手抽一条递给它，让它自己也会用
 ALTER TABLE lore ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
 ALTER TABLE lore ADD COLUMN IF NOT EXISTS occasional BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS memory_links (          -- 让别的 AI 连上 TA 的记忆（10-16 Aporia：像 OB 那样一份记忆、几家一起连；brain/memory_link.py）
+  companion_id UUID        PRIMARY KEY REFERENCES companions(id) ON DELETE CASCADE,
+  token_hash   TEXT        NOT NULL UNIQUE,          -- 查的时候用（sha256）
+  secret       BYTEA       NOT NULL,                 -- 主密钥加密的原文：App 里随时能再看、再复制
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

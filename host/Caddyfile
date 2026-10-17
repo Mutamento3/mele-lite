@@ -1,5 +1,7 @@
 # 聊天是 SSE 事件流，flush_interval -1 = 不攒着、来一个字推一个字
-{$MELE_DOMAIN} {
+# MELE_SITE 平时就是 MELE_DOMAIN（Caddy 自己签 HTTPS）；隧道模式（10-17）是 :80——HTTPS 交给 Tailscale Funnel / Cloudflare Tunnel，
+# 这里只收本机转进来的纯 HTTP
+{$MELE_SITE} {
 	encode gzip
 	reverse_proxy mele:8080 {
 		flush_interval -1

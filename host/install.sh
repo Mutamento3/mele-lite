@@ -2,6 +2,9 @@
 # Mele Host 一条命令安装（10-04）。在一台干净的 Ubuntu / Debian 服务器上用 root 跑：
 #   curl -fsSL https://raw.githubusercontent.com/aporia-and-poros/mele-lite/main/host/install.sh | bash
 # 可选：MELE_DOMAIN=你的域名（先把域名解析到这台服务器）；不填就用 sslip.io。
+# 家里 / 学校的电脑、没有公网 IP（10-17）：MELE_TUNNEL=1，HTTPS 交给 Tailscale Funnel / Cloudflare Tunnel：
+#   curl -fsSL …/install.sh | MELE_TUNNEL=1 MELE_DOMAIN=my-pc.tail1234.ts.net bash
+#   （装了 Tailscale 并且登录了的话 MELE_DOMAIN 可以不填，自己读这台电脑的名字）
 set -euo pipefail
 
 # 整个包进函数、最后才调用（10-05）：`curl | bash` 是边下边读的，中间 docker compose exec 会把没读到的后半截脚本
@@ -39,10 +42,17 @@ say "下载配置"
 for f in docker-compose.yml Caddyfile mele-host; do curl -fsSL "$RAW/$f" -o "$f"; done
 install -m 755 mele-host /usr/local/bin/mele-host
 
+TUNNEL=${MELE_TUNNEL:-0}
+if [ "$TUNNEL" = 1 ] && [ -z "${MELE_DOMAIN:-}" ] && command -v tailscale >/dev/null 2>&1; then
+  MELE_DOMAIN=$(tailscale status --json 2>/dev/null \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)
+fi
+[ "$TUNNEL" != 1 ] || [ -n "${MELE_DOMAIN:-}" ] || die "隧道模式要告诉我隧道给你的域名：MELE_TUNNEL=1 MELE_DOMAIN=my-pc.tail1234.ts.net"
+
 if [ ! -f .env ]; then
   # 查公网 IP：一家查不到换下一家（10-12 内测：国内机器连不上 ipify，脚本停在这儿）
   ip=""
-  for u in https://api.ipify.org https://ifconfig.me https://ip.sb https://4.ipw.cn; do
+  [ "$TUNNEL" = 1 ] || for u in https://api.ipify.org https://ifconfig.me https://ip.sb https://4.ipw.cn; do
     ip=$(curl -fsS4 -m 8 "$u" 2>/dev/null | tr -d '[:space:]' || true)
     [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
     ip=""
@@ -61,6 +71,14 @@ RERANK=0
 ENV
   chmod 600 .env
 fi
+# 隧道模式在第一次起之前就写进 .env：不然 Caddy 先去抢 80 / 443，家里电脑上这俩端口常被占，一起就失败
+if [ "$TUNNEL" = 1 ]; then
+  for kv in "MELE_DOMAIN=$MELE_DOMAIN" "MELE_SITE=:80" "MELE_HTTP_PORT=127.0.0.1:${MELE_TUNNEL_PORT:-8080}" \
+            "MELE_HTTPS_PORT=127.0.0.1:$(( ${MELE_TUNNEL_PORT:-8080} + 363 ))"; do
+    k=${kv%%=*}
+    if grep -q "^$k=" .env; then sed -i "s|^$k=.*|$kv|" .env; else echo "$kv" >> .env; fi
+  done
+fi
 set -a; . ./.env; set +a
 
 say "启动（第一次要下载镜像，几分钟）"
@@ -70,12 +88,17 @@ docker compose up -d
 say "下载记忆模型（约 2.3GB，只这一次）"
 docker compose exec -T mele python -m api.host warm </dev/null
 
-say "等 HTTPS 证书"
-for _ in $(seq 1 60); do
-  curl -fsS "https://$MELE_DOMAIN/version" >/dev/null 2>&1 && break
-  sleep 5
-done
-curl -fsS "https://$MELE_DOMAIN/version" >/dev/null || die "https://$MELE_DOMAIN 连不上：检查防火墙 80 / 443 端口有没有开"
+if [ "${MELE_SITE:-}" = ":80" ]; then
+  say "隧道模式"
+  mele-host tunnel on "$MELE_DOMAIN" </dev/null
+else
+  say "等 HTTPS 证书"
+  for _ in $(seq 1 60); do
+    curl -fsS "https://$MELE_DOMAIN/version" >/dev/null 2>&1 && break
+    sleep 5
+  done
+  curl -fsS "https://$MELE_DOMAIN/version" >/dev/null || die "https://$MELE_DOMAIN 连不上：检查防火墙 80 / 443 端口有没有开（家里 / 学校的电脑没有公网 IP 的话，用隧道模式：MELE_TUNNEL=1）"
+fi
 
 mele-host pair </dev/null
 
@@ -87,8 +110,8 @@ cat <<DONE
     $MASTER_KEY
     以后随时看：mele-host key
 
-常用：mele-host pair（重新配对）· mele-host update（升级）· mele-host logs（看日志）
-想要记忆库（星图、别的 AI 也能连的那个）：mele-host memory on（内存建议 6GB 以上）
+常用：mele-host pair（重新配对）· mele-host update（升级）· mele-host logs（看日志）· mele-host tunnel（隧道模式）
+想让别的 AI（比如 Claude）也连上 TA 的记忆：App 里 TA 设定 → 记性 →「让别的 AI 连上 TA 的记忆」
 DONE
 }
 

@@ -45,6 +45,42 @@ public enum Monologue {
         return (mono, body)
     }
 
+    /// 一个标记都没写、心里话直接混进正文开头（10-16 内测）：开着手写独白时才用，照Poros那次的思路——
+    /// 漏的那段不进气泡、不进历史，它下一轮就看不到自己漏过的样子，不会越漏越多。
+    /// 只认开头几行：一个「你」都没有（引号里的不算）、提到 TA 时用的是 pronoun（她 / 他 / TA；英文 she / he），
+    /// 后面还得有对 TA 说「你」的正文；*动作* 开头的行不算（线下模式的动作描写）。认不准就原样不动。
+    /// 跟 Host 的 brain/monologue.recover_untagged 同一个规矩
+    public static func recoverUntagged(_ text: String, pronoun: String, zh: Bool) -> (monologue: String, body: String) {
+        let none = ("", text)
+        guard pairCount(text) == 0 else { return none }
+        let p = pronoun.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty, zh || ["she", "he"].contains(p.lowercased()) else { return none }
+        let you = zh ? saysYou : saysYouEN
+        let lines = text.components(separatedBy: "\n")
+        func plain(_ l: String) -> String {
+            quoted.stringByReplacingMatches(in: l, range: NSRange(location: 0, length: (l as NSString).length), withTemplate: "")
+        }
+        func has(_ re: NSRegularExpression, _ l: String) -> Bool {
+            re.firstMatch(in: l, range: NSRange(location: 0, length: (l as NSString).length)) != nil
+        }
+        var cut = 0, mentions = false
+        for (i, l) in lines.enumerated() {
+            let t = l.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { continue }
+            if has(you, plain(t)) { cut = i; break }
+            if t.hasPrefix("*") || t.hasPrefix("＊") { return none }
+            if zh ? plain(t).contains(p) : has(try! NSRegularExpression(pattern: "\\b\(p)\\b", options: [.caseInsensitive]), plain(t)) { mentions = true }
+            cut = i + 1
+        }
+        guard mentions, cut > 0, cut < lines.count,
+              lines[cut...].contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return none }
+        let mono = lines[..<cut].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = lines[cut...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return mono.isEmpty ? none : (mono, body)
+    }
+
+    static let saysYouEN = try! NSRegularExpression(pattern: #"\byou(r|rs|rself)?\b"#, options: [.caseInsensitive])
+
     static let closeShape = try! NSRegularExpression(pattern: "^" + L + #"\s*(?:/|end\s)|(?:/|完|结束|結束|end)\s*"# + R + "$", options: [.caseInsensitive])
     static func isClose(_ tag: String) -> Bool {
         closeShape.firstMatch(in: tag, range: NSRange(location: 0, length: (tag as NSString).length)) != nil

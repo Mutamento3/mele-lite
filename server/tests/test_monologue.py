@@ -77,3 +77,20 @@ def test_second_unclosed_monologue_does_not_leak_10_16():
     assert "我有点急" in mono
     mono, body = split_monologue("[独白]\n想她。\n[/独白]\n抱抱你。\n[/独白]")
     assert body == "抱抱你。" and mono == "想她。"
+
+
+def test_recover_untagged_10_16():
+    """一个标记都没写、心里话混进正文开头：开头几行没「你」、提到「她」、后面有对她说的话 → 收进独白"""
+    from brain.monologue import recover_untagged
+    text = "她今天又熬夜了，我有点急。\n她嘴上说没事。\n你几点睡的？\n快去喝口水。"
+    assert recover_untagged(text, "她", True) == ("她今天又熬夜了，我有点急。\n她嘴上说没事。", "你几点睡的？\n快去喝口水。")
+    for keep in ("我刚吃完饭。\n你呢？",                            # 开头没提到她：正常的话
+                 "她今天又熬夜了。",                                 # 整条都是第三人称：没正文，不动
+                 "*把她抱起来*\n你怎么这么轻",                         # 线下的动作描写
+                 "你今天怎么样？\n她说得对。",                          # 第一行就对着你说
+                 "[独白]她累了[/独白]\n你先睡"):                        # 有标记的归 split 管
+        assert recover_untagged(keep, "她", True) == ("", keep)
+    assert recover_untagged("「你好」她今天说了三遍。\n你还记得吗", "她", True)[0] == "「你好」她今天说了三遍。"   # 引号里的你不算
+    assert recover_untagged("「她说你好」这句我记得。\n你还记得吗", "她", True)[0] == ""                       # 引号里的她也不算
+    assert recover_untagged("She looks tired tonight.\nHey, did you eat?", "she", False) == ("She looks tired tonight.", "Hey, did you eat?")
+    assert recover_untagged("They look tired.\nDid you eat?", "they", False)[0] == ""   # they 太常见，不认

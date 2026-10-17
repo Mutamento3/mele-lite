@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 from uuid import UUID
 
@@ -248,15 +249,20 @@ async def _hook_token(a: Api, acc: UUID, *, reset: bool = False) -> str:
     return token
 
 
+def _public_base(request: Request) -> str:
+    """对外地址：Host 有 NEWAPP_PUBLIC_URL 就用它（10-17：Caddy / 隧道后面 request 看到的是 http://，快捷指令拿去连不上）"""
+    return os.environ.get("NEWAPP_PUBLIC_URL", "").strip().rstrip("/") or str(request.base_url).rstrip("/")
+
+
 @router.get("/me/hook")
 async def get_hook(request: Request, acc: UUID = Depends(account), a: Api = Depends(api)):
     """快捷指令入口：网址 + 口令（第一次拿时生成）。"""
-    return {"url": str(request.base_url).rstrip("/") + "/hooks/context", "token": await _hook_token(a, acc)}
+    return {"url": _public_base(request) + "/hooks/context", "token": await _hook_token(a, acc)}
 
 
 @router.post("/me/hook/reset")
 async def reset_hook(request: Request, acc: UUID = Depends(account), a: Api = Depends(api)):
-    return {"url": str(request.base_url).rstrip("/") + "/hooks/context", "token": await _hook_token(a, acc, reset=True)}
+    return {"url": _public_base(request) + "/hooks/context", "token": await _hook_token(a, acc, reset=True)}
 
 
 @router.post("/hooks/context", status_code=204)
