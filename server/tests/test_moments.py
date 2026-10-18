@@ -175,3 +175,41 @@ async def test_free_visit_waits_out_deepseek_peak(pool):
     row = await pool.fetchrow("SELECT status, due_at FROM moment_visits")
     assert row["status"] == "pending" and row["due_at"] == datetime(2026, 10, 6, 4, 0, tzinfo=timezone.utc)
     assert e.model.requests == []
+
+
+async def test_recap_for_chat(pool):
+    """聊天里知道朋友圈（10-18）：上次聊完以后跟它有关的——TA 发的、TA 赞它的、TA 说给它的、它自己留的"""
+    acc, lumi, lin = await family(pool)
+    t = lambda m: NOW + timedelta(minutes=m)                                          # noqa: E731
+    sunset = await MO.post(pool, acc, MO.USER, content="今天的晚霞", now=t(0), rng=R)
+    mine = await MO.post(pool, acc, str(lumi), content="她今天又熬夜", now=t(1), rng=R)
+    await MO.like(pool, acc, mine.id, MO.USER, now=t(2))
+    c = await MO.comment(pool, acc, mine.id, MO.USER, "早点睡你也是", now=t(3), rng=R)   # 直接评在它的动态下
+    await MO.comment(pool, acc, mine.id, str(lumi), "那你先睡", now=t(4), reply_to=c["id"], rng=R)
+    other = await MO.post(pool, acc, str(lin), content="书店的猫", now=t(5), rng=R)
+    await MO.comment(pool, acc, other.id, MO.USER, "好胖", now=t(6), rng=R)              # 说给林晚的，不算
+    got = await MO.recap_events(pool, acc, lumi, None, t(10))
+    assert [e["kind"] for e in got] == ["post", "like", "comment", "mine"]
+    text = MO.render_recap(got, t(10), "zh")
+    assert text.startswith("〔朋友圈〕") and "TA 发了一条：「今天的晚霞」" in text and "TA 赞了你那条「她今天又熬夜」" in text
+    assert "TA 在你那条「她今天又熬夜」下评论：「早点睡你也是」" in text and "你在自己那条「她今天又熬夜」下留了：「那你先睡」" in text
+    assert "好胖" not in text and "书店" not in text
+    assert await MO.recap_events(pool, acc, lumi, t(7), t(10)) == []                  # 上次聊完以后没新的
+    assert [e["kind"] for e in await MO.recap_events(pool, acc, lin, None, t(10))] == ["post", "comment"]
+    assert MO.render_recap([], t(10), "zh") == ""
+    await MO.comment(pool, acc, sunset.id, str(lumi), "好看", now=t(8), rng=R)          # 它评在 TA 的动态下
+    assert "你在 TA 那条「今天的晚霞」下留了：「好看」" in MO.render_recap(
+        await MO.recap_events(pool, acc, lumi, t(7), t(10)), t(10), "zh")
+
+
+async def test_recap_told_once_in_chat(pool):
+    from test_wake_turn import NOW as T, go, setup
+    deps, scope, model = await setup(pool, ["嗯", "嗯"])
+    await MO.post(pool, scope.account, MO.USER, content="今天的晚霞", now=T - timedelta(minutes=30), rng=R)
+    await go(deps, scope, "在吗")
+    await go(deps, scope, "在吗")
+
+    def seen(req) -> str:
+        return "\n".join([b.text for b in req.system] + [m.text for m in req.messages])
+    assert "〔朋友圈〕" in seen(model.requests[0]) and "今天的晚霞" in seen(model.requests[0])
+    assert "〔朋友圈〕" not in seen(model.requests[1])                                # 说过一次就不再递

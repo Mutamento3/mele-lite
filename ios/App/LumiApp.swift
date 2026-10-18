@@ -71,6 +71,7 @@ private struct SignedIn: View {
                     if ProcessInfo.processInfo.arguments.contains("-memorySelfTest") { LocalMemorySelfTest.run() }
                     if ProcessInfo.processInfo.arguments.contains("-dedupeSelfTest") { LocalDedupeSelfTest.run() }
                     if ProcessInfo.processInfo.arguments.contains("-peopleSelfTest") { LocalPeopleSelfTest.run() }
+                    if ProcessInfo.processInfo.arguments.contains("-momentsSelfTest") { LocalRooms3.selfTest(LocalHost.shared) }
                     #endif
                     #endif
                     await model.refresh()

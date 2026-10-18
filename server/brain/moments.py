@@ -260,3 +260,66 @@ async def activity(pool, account: UUID, since: datetime | None) -> dict:
                "moment_id": r["moment_id"], "post": r["post"], "content": r["content"]} for r in comments]
     items.sort(key=lambda x: x["at"], reverse=True)
     return {"count": len(items), "new_posts": new_posts, "items": items[:50]}
+
+
+# ── 聊天里知道朋友圈（10-18 内测：它在朋友圈回过的、TA 评论它的，聊天里一概不知道）──
+# 之前自用的 App是同一个脑子刷朋友圈，天然知道；Mele 的朋友圈是单独一小轮，这里把上次聊天以后的新动静在下一轮聊天前递一次。
+RECAP_LOOKBACK = timedelta(hours=48)
+RECAP_MAX = 8
+_RECAP_HEAD = {"zh": "〔朋友圈〕上次聊完以后，朋友圈里跟你有关的事（你都看见了，想提就提）：",
+               "en": "〔Moments〕Since you last talked, on Moments (you've seen all of this; bring it up if you like):"}
+
+
+async def recap_events(pool, account: UUID, companion: UUID, since: datetime | None, now: datetime) -> list[dict]:
+    """since 之后：TA 发的动态、TA 赞它的、TA 说给它的评论、它自己留的评论。最多往回看 48 小时。"""
+    me = str(companion)
+    start = max(since, now - RECAP_LOOKBACK) if since else now - RECAP_LOOKBACK
+    out: list[dict] = []
+    for r in await pool.fetch("""SELECT content, created_at FROM moments WHERE account_id = $1 AND author = $2
+                                 AND created_at > $3 ORDER BY created_at""", account, USER, start):
+        out.append({"kind": "post", "at": r["created_at"], "post": r["content"]})
+    for r in await pool.fetch("""SELECT l.created_at, m.content FROM moment_likes l JOIN moments m ON m.id = l.moment_id
+                                 WHERE m.account_id = $1 AND m.author = $2 AND l.who = $3 AND l.created_at > $4""",
+                              account, me, USER, start):
+        out.append({"kind": "like", "at": r["created_at"], "post": r["content"], "whose": "its"})
+    for r in await pool.fetch(
+            """SELECT c.author, c.content, c.created_at, m.content AS post, m.author AS post_author, p.author AS parent_author
+               FROM moment_comments c JOIN moments m ON m.id = c.moment_id LEFT JOIN moment_comments p ON p.id = c.reply_to
+               WHERE m.account_id = $1 AND c.created_at > $2 AND c.author IN ($3, $4)""", account, start, USER, me):
+        whose = "its" if r["post_author"] == me else "user" if r["post_author"] == USER else "other"
+        if r["author"] == me:
+            out.append({"kind": "mine", "at": r["created_at"], "post": r["post"], "text": r["content"], "whose": whose})
+        elif (r["parent_author"] or r["post_author"]) == me:          # 说给它的：回它的评论，或者直接评在它的动态下
+            out.append({"kind": "comment", "at": r["created_at"], "post": r["post"], "text": r["content"],
+                        "reply": r["parent_author"] == me, "whose": whose})
+    out.sort(key=lambda e: e["at"])
+    return out[-RECAP_MAX:]
+
+
+def render_recap(events: list[dict], now: datetime, lang: str) -> str:
+    from .context_line import _ago
+    if not events:
+        return ""
+    zh = lang == "zh"
+
+    def cut(s: str, n: int) -> str:
+        s = " ".join((s or "").split())
+        return s if len(s) <= n else s[:n] + "…"
+
+    zh_whose = {"its": "你那条", "user": "TA 那条", "other": "那条"}
+    en_whose = {"its": "your post", "user": "their post", "other": "the post"}
+    lines = [_RECAP_HEAD["zh" if zh else "en"]]
+    for e in events:
+        when, post = _ago(now - e["at"], lang), cut(e["post"], 40)
+        if e["kind"] == "post":
+            s = f"TA 发了一条：「{cut(e['post'], 120)}」" if zh else f"they posted: \"{cut(e['post'], 120)}\""
+        elif e["kind"] == "like":
+            s = f"TA 赞了你那条「{post}」" if zh else f"they liked your post \"{post}\""
+        elif e["kind"] == "comment":
+            s = (f"TA 在{zh_whose[e['whose']]}「{post}」下{'回你' if e['reply'] else '评论'}：「{cut(e['text'], 120)}」" if zh
+                 else f"they {'replied to you' if e['reply'] else 'commented'} under {en_whose[e['whose']]} \"{post}\": \"{cut(e['text'], 120)}\"")
+        else:
+            s = (f"你在{ {'its': '自己那条', 'user': ' TA 那条', 'other': '那条'}[e['whose']] }「{post}」下留了：「{cut(e['text'], 120)}」" if zh
+                 else f"you left under {en_whose[e['whose']]} \"{post}\": \"{cut(e['text'], 120)}\"")
+        lines.append(f"- {s}（{when}）" if zh else f"- {s} ({when})")
+    return "\n".join(lines)

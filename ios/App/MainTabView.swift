@@ -77,6 +77,9 @@ struct MainTabView: View {
             if phase == .active {
                 ContextReporter.shared.foreground(); PushDelegate.clearDelivered()
                 Task { await model.refreshWindows() }                       // 不在的时候它可能说过话：列表预览刷新
+                #if LITE
+                if Lite.local { Task { await LocalRooms3.runDueVisits(LocalHost.shared) } }   // 朋友圈：关着的时候欠下的来回（10-18）
+                #endif
                 Task {
                     await FocusStore.shared.refresh(api: model.api)             // 专注：读回插件记的、到点自动结束
                 }
@@ -89,6 +92,9 @@ struct MainTabView: View {
             await MusicStore.shared.load()               // 歌卡要知道 TA 用什么听歌
             ContextReporter.shared.foreground()
             if !model.loaded { await model.refresh() }
+            #if LITE
+            if Lite.local { Task { await LocalRooms3.runDueVisits(LocalHost.shared) } }   // 朋友圈：上次关掉前欠下的来回（10-18）
+            #endif
             await model.greetIfPending()
             if !Lite.local { await PushDelegate.requestAndRegister() }   // 手机里的小管家推不了；连着 Mele Host 就要（10-04）
             await model.reportDevice()

@@ -273,47 +273,192 @@ enum LocalRooms3 {
         return .error(404, String(localized: "没有这条评论（只能删自己的）"))
     }
 
-    /// TA 过一会儿来：你发了动态 → 每个配了 key 的联系人 1～3 分钟后赞一下、留一句；你回了它的评论 → 它接一句。
-    /// Lite 没有服务器，App 关着就等下次打开（这一版先只在 App 开着时来）。
+    /// 一条评论是说给谁的：回某条评论 = 那条的作者，直接评论 = 发动态的人
+    static func addressee(parent: [String: Any]?, post: [String: Any]) -> String? {
+        (parent ?? post)["author"] as? String
+    }
+
+    /// TA 过一会儿来：你发了动态 → 每个联系人过一阵来赞一下、留一句；你评论了它的动态 / 回了它的评论 → 它接一句。
+    /// 先记进 rooms/moment-visits.json 再等（10-18 内测：以前只在内存里等，评论完把 App 关掉，它就再也不来了）：
+    /// App 开着到点就来；关掉了，下次打开 / 回到前台补上。太久的（3 天）就算了。
     static func drop(_ host: LocalHost, moment id: Int, replyTo: Int?) {
-        Task.detached {
-            let s = host.store
-            for comp in s.companions {
-                guard let cid = comp["id"] as? String, let (provider, key) = host.route(chore: "moments", else: host.quietRoute(for: comp)),
-                      !LiteConsent.book.needsAsk(provider) else { continue }
-                guard let m = s.collection("moments").first(where: { ($0["id"] as? Int) == id }) else { return }
-                let comments = m["comments"] as? [[String: Any]] ?? []
-                if let replyTo {                      // 只回在它评论下面接的话
-                    guard let mine = comments.first(where: { ($0["id"] as? Int) == replyTo }),
-                          let parent = (mine["reply_to"] as? Int).flatMap({ r in comments.first { ($0["id"] as? Int) == r } }),
-                          (parent["author"] as? String) == cid || (m["author"] as? String) == cid else { continue }
-                }
-                try? await Task.sleep(for: .seconds(Double.random(in: 60...180)))
-                let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
-                let contact = LocalBrain.contact(comp, provider: provider)
-                let thread = comments.map { "\(names(host)[$0["author"] as? String ?? ""] ?? "")：\($0["content"] as? String ?? "")" }.joined(separator: "\n")
-                let ask = zh
-                    ? "TA 在朋友圈\(replyTo == nil ? "发了一条" : "回了你的评论")。\n动态：\(m["content"] as? String ?? "")\(thread.isEmpty ? "" : "\n评论区：\n\(thread)")\n\n用你的口吻写一句评论（朋友圈那种短短一句），只写这一句。"
-                    : "They \(replyTo == nil ? "posted on their feed" : "replied to your comment").\nPost: \(m["content"] as? String ?? "")\(thread.isEmpty ? "" : "\nComments:\n\(thread)")\n\nWrite one short comment in your own voice. Only the comment."
-                var req = Prompt.build(PromptInput(contact: contact, identity: contact.mainIdentity, history: [], lang: zh ? .zh : .en))
-                req.turns = [ChatTurn(role: .user, text: ask)]
-                req.maxTokens = 400
-                var text = ""
-                do { for try await e in makeClient(provider, key: key).stream(req) { if case .text(let t) = e { text += t } } } catch { continue }
-                let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                _ = update(s, id) { m in
-                    if replyTo == nil {
-                        var likes = m["likes"] as? [[String: Any]] ?? []
-                        if !likes.contains(where: { ($0["who"] as? String) == cid }) { likes.append(["who": cid, "at": LocalStore.iso(Date())]) }
-                        m["likes"] = likes
-                    }
-                    guard !said.isEmpty else { return }
-                    var cs = m["comments"] as? [[String: Any]] ?? []
-                    cs.append(["id": s.nextID("moment-comment"), "author": cid, "content": String(said.prefix(300)),
-                               "reply_to": replyTo ?? NSNull(), "created_at": LocalStore.iso(Date())])
-                    m["comments"] = cs
+        let s = host.store
+        guard let m = s.collection("moments").first(where: { ($0["id"] as? Int) == id }) else { return }
+        var who: [String] = []
+        if let replyTo {
+            let comments = m["comments"] as? [[String: Any]] ?? []
+            guard let mine = comments.first(where: { ($0["id"] as? Int) == replyTo }) else { return }
+            let parent = (mine["reply_to"] as? Int).flatMap { r in comments.first { ($0["id"] as? Int) == r } }
+            // 10-18 内测：以前只认「回它的评论」，直接评论在它动态下的被当成不是说给它的，它从来不来
+            if let to = addressee(parent: parent, post: m), to != "user" { who = [to] }
+        } else {
+            who = s.companions.compactMap { $0["id"] as? String }
+        }
+        guard !who.isEmpty else { return }
+        visitLock.lock()
+        var jobs = s.collection("moment-visits")
+        for cid in who {   // 不秒回（10-18 Aporia：跟之前自用的 App一样）：你发的 15～180 分钟、多数 45；评论 5～60、多数 15
+            let wait = replyTo == nil ? triangular(15, 45, 180) : triangular(5, 15, 60)
+            jobs.append(["companion": cid, "moment": id, "reply_to": replyTo ?? NSNull(),
+                         "due": LocalStore.iso(Date().addingTimeInterval(wait * 60))])
+        }
+        s.saveCollection("moment-visits", jobs)
+        visitLock.unlock()
+        scheduleVisits(host)
+    }
+
+    /// 聊天里知道朋友圈（10-18，跟 Host moments.recap 一样）：这个窗口上次聊完以后跟它有关的新动静，递一次——
+    /// TA 发的、TA 赞它的、TA 说给它的评论、它自己留的。最多往回 48 小时、8 条。
+    static func recapNote(_ s: LocalStore, companion cid: String, conversation conv: String, zh: Bool) -> String {
+        let now = Date()
+        var seen = s.read("moments-seen.json") as? [String: String] ?? [:]
+        let floor = now.addingTimeInterval(-48 * 3600)
+        let since = seen[conv].map { max(LocalStore.date($0), floor) } ?? floor
+        seen[conv] = LocalStore.iso(now)
+        s.write("moments-seen.json", seen)
+        func cut(_ v: Any?, _ n: Int) -> String {
+            let t = (v as? String ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return t.count <= n ? t : String(t.prefix(n)) + "…"
+        }
+        var ev: [(Date, String)] = []
+        for m in s.collection("moments") {
+            let author = m["author"] as? String ?? ""
+            let post = cut(m["content"], 40)
+            let whose = author == cid ? (zh ? "你那条" : "your post") : author == "user" ? (zh ? "TA 那条" : "their post") : (zh ? "那条" : "the post")
+            if author == "user", LocalStore.date(m["created_at"]) > since {
+                ev.append((LocalStore.date(m["created_at"]), zh ? "TA 发了一条：「\(cut(m["content"], 120))」" : "they posted: \"\(cut(m["content"], 120))\""))
+            }
+            if author == cid {
+                for l in m["likes"] as? [[String: Any]] ?? [] where (l["who"] as? String) == "user" && LocalStore.date(l["at"]) > since {
+                    ev.append((LocalStore.date(l["at"]), zh ? "TA 赞了你那条「\(post)」" : "they liked your post \"\(post)\""))
                 }
             }
+            let comments = m["comments"] as? [[String: Any]] ?? []
+            for c in comments where LocalStore.date(c["created_at"]) > since {
+                let at = LocalStore.date(c["created_at"]), text = cut(c["content"], 120)
+                let a = c["author"] as? String ?? ""
+                if a == cid {
+                    let mineWhose = author == cid ? (zh ? "自己那条" : "your post") : author == "user" ? (zh ? " TA 那条" : "their post") : (zh ? "那条" : "the post")
+                    ev.append((at, zh ? "你在\(mineWhose)「\(post)」下留了：「\(text)」" : "you left under \(mineWhose) \"\(post)\": \"\(text)\""))
+                } else if a == "user" {
+                    let parent = (c["reply_to"] as? Int).flatMap { r in comments.first { ($0["id"] as? Int) == r } }
+                    guard addressee(parent: parent, post: m) == cid else { continue }
+                    ev.append((at, zh ? "TA 在\(whose)「\(post)」下\(parent != nil ? "回你" : "评论")：「\(text)」"
+                                      : "they \(parent != nil ? "replied to you" : "commented") under \(whose) \"\(post)\": \"\(text)\""))
+                }
+            }
+        }
+        guard !ev.isEmpty else { return "" }
+        func ago(_ d: Date) -> String {
+            let m = max(0, Int(now.timeIntervalSince(d) / 60))
+            return zh ? (m < 2 ? "刚刚" : m < 60 ? "\(m) 分钟前" : "\(m / 60) 小时前") : (m < 2 ? "just now" : m < 60 ? "\(m) min ago" : "\(m / 60) h ago")
+        }
+        let rows = ev.sorted { $0.0 < $1.0 }.suffix(8).map { zh ? "- \($0.1)（\(ago($0.0))）" : "- \($0.1) (\(ago($0.0)))" }
+        return (zh ? "〔朋友圈〕上次聊完以后，朋友圈里跟你有关的事（你都看见了，想提就提）："
+                   : "〔Moments〕Since you last talked, on Moments (you've seen all of this; bring it up if you like):")
+            + "\n" + rows.joined(separator: "\n")
+    }
+
+    /// 三角分布（分钟）：大多落在 mode 附近，偶尔很快或很晚——跟 Host / 之前自用的 App同一套
+    static func triangular(_ lo: Double, _ mode: Double, _ hi: Double) -> Double {
+        let u = Double.random(in: 0..<1), c = (mode - lo) / (hi - lo)
+        return u < c ? lo + ((hi - lo) * (mode - lo) * u).squareRoot() : hi - ((hi - lo) * (hi - mode) * (1 - u)).squareRoot()
+    }
+
+    #if DEBUG
+    /// -momentsSelfTest（10-18）：不叫模型，只看排队和〔朋友圈〕；跑完把朋友圈和队列换回原样
+    static func selfTest(_ host: LocalHost) {
+        let s = host.store
+        let keep = (s.collection("moments"), s.collection("moment-visits"), s.read("moments-seen.json"))
+        defer {
+            s.saveCollection("moments", keep.0); s.saveCollection("moment-visits", keep.1)
+            if let v = keep.2 { s.write("moments-seen.json", v) } else { s.write("moments-seen.json", [String: String]()) }
+        }
+        guard let cid = s.companions.first?["id"] as? String else { print("momentsSelfTest FAILED: 没有联系人"); return }
+        let now = LocalStore.iso(Date())
+        s.saveCollection("moments", [["id": 9001, "author": cid, "content": "她今天又熬夜", "created_at": now,
+                                      "likes": [["who": "user", "at": now]], "comments": [[String: Any]]()]])
+        s.saveCollection("moment-visits", [])
+        s.write("moments-seen.json", [String: String]())
+        _ = comment(host, 9001, ["content": "早点睡你也是"])
+        let jobs = s.collection("moment-visits")
+        let mins = jobs.map { LocalStore.date($0["due"]).timeIntervalSinceNow / 60 }
+        let queued = jobs.count == 1 && (jobs[0]["companion"] as? String) == cid && mins.allSatisfy { $0 >= 4.9 && $0 <= 60.1 }
+        let first = recapNote(s, companion: cid, conversation: "selftest", zh: true)
+        let second = recapNote(s, companion: cid, conversation: "selftest", zh: true)
+        let told = first.contains("TA 在你那条「她今天又熬夜」下评论：「早点睡你也是」") && first.contains("TA 赞了你那条") && second.isEmpty
+        let tri = (0..<2000).map { _ in triangular(15, 45, 180) }
+        let triOK = tri.min()! >= 15 && tri.max()! <= 180 && abs(tri.reduce(0, +) / 2000 - 80) < 6   // 均值 (15+45+180)/3 = 80
+        print("momentsSelfTest", queued && told && triOK ? "ok" : "FAILED", "queued=\(queued) mins=\(mins) told=\(told) tri=\(triOK)")
+        print(first)
+    }
+    #endif
+
+    private static let visitLock = NSLock()
+    private static let visitMaxAge: TimeInterval = 3 * 86400
+
+    /// 等到最早那一笔到点再跑（App 被挂起 / 关掉就等下次 runDueVisits）
+    static func scheduleVisits(_ host: LocalHost) {
+        let next = host.store.collection("moment-visits").map { LocalStore.date($0["due"]) }.min()
+        guard let next else { return }
+        Task.detached {
+            let wait = next.timeIntervalSinceNow
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait + 1)) }
+            await runDueVisits(host)
+        }
+    }
+
+    /// 到点的都来一遍：先从文件里摘下来（两处同时跑也不会回两次），再一个个问模型
+    static func runDueVisits(_ host: LocalHost) async {
+        let s = host.store
+        visitLock.lock()
+        let all = s.collection("moment-visits")
+        let now = Date()
+        let due = all.filter { LocalStore.date($0["due"]) <= now }
+        s.saveCollection("moment-visits", all.filter { LocalStore.date($0["due"]) > now })
+        visitLock.unlock()
+        for job in due where now.timeIntervalSince(LocalStore.date(job["due"])) < visitMaxAge {
+            guard let cid = job["companion"] as? String, let id = job["moment"] as? Int else { continue }
+            await visit(host, companion: cid, moment: id, replyTo: job["reply_to"] as? Int)
+        }
+        if !s.collection("moment-visits").isEmpty { scheduleVisits(host) }
+    }
+
+    private static func visit(_ host: LocalHost, companion cid: String, moment id: Int, replyTo: Int?) async {
+        let s = host.store
+        guard let comp = s.companions.first(where: { ($0["id"] as? String) == cid }),
+              let (provider, key) = host.route(chore: "moments", else: host.quietRoute(for: comp)),
+              !LiteConsent.book.needsAsk(provider),
+              let m = s.collection("moments").first(where: { ($0["id"] as? Int) == id }) else { return }
+        let comments = m["comments"] as? [[String: Any]] ?? []
+        var onMyPost = false
+        if let replyTo {
+            guard let mine = comments.first(where: { ($0["id"] as? Int) == replyTo }) else { return }   // 那句被删了
+            onMyPost = mine["reply_to"] is NSNull || mine["reply_to"] == nil
+        }
+        let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
+        let contact = LocalBrain.contact(comp, provider: provider)
+        let thread = comments.map { "\(names(host)[$0["author"] as? String ?? ""] ?? "")：\($0["content"] as? String ?? "")" }.joined(separator: "\n")
+        let ask = zh
+            ? "TA 在朋友圈\(replyTo == nil ? "发了一条" : onMyPost ? "评论了你的动态" : "回了你的评论")。\n动态：\(m["content"] as? String ?? "")\(thread.isEmpty ? "" : "\n评论区：\n\(thread)")\n\n用你的口吻写一句评论（朋友圈那种短短一句），只写这一句。"
+            : "They \(replyTo == nil ? "posted on their feed" : onMyPost ? "commented on your post" : "replied to your comment").\nPost: \(m["content"] as? String ?? "")\(thread.isEmpty ? "" : "\nComments:\n\(thread)")\n\nWrite one short comment in your own voice. Only the comment."
+        var req = Prompt.build(PromptInput(contact: contact, identity: contact.mainIdentity, history: [], lang: zh ? .zh : .en))
+        req.turns = [ChatTurn(role: .user, text: ask)]
+        req.maxTokens = 400
+        var text = ""
+        do { for try await e in makeClient(provider, key: key).stream(req) { if case .text(let t) = e { text += t } } } catch { return }
+        let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = update(s, id) { m in
+            if replyTo == nil {
+                var likes = m["likes"] as? [[String: Any]] ?? []
+                if !likes.contains(where: { ($0["who"] as? String) == cid }) { likes.append(["who": cid, "at": LocalStore.iso(Date())]) }
+                m["likes"] = likes
+            }
+            guard !said.isEmpty else { return }
+            var cs = m["comments"] as? [[String: Any]] ?? []
+            cs.append(["id": s.nextID("moment-comment"), "author": cid, "content": String(said.prefix(300)),
+                       "reply_to": replyTo ?? NSNull(), "created_at": LocalStore.iso(Date())])
+            m["comments"] = cs
         }
     }
 }

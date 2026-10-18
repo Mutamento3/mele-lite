@@ -537,11 +537,12 @@ final class LocalBrain: @unchecked Sendable {
             let occ = LocalRooms.occasionalLore(host.store, companion: comp["id"] as? String ?? "", conversation: conv, msgCount: stored.count, zh: zh)
             if !occ.isEmpty { req.context += "\n\n" + occ }
         }
-        // 〔在读〕TA 正在读哪本、〔塔罗〕TA 刚让它解过的一局（一次性）
+        // 〔在读〕TA 正在读哪本、〔塔罗〕TA 刚让它解过的一局、〔朋友圈〕上次聊完以后的新动静（一次性）
         // 小号不给：那是平常的你在读 / 在听 / 刚抽的牌
         let cidNow = comp["id"] as? String ?? ""
         for line in altInfo != nil || group != nil ? [] : [LocalBooks.readingLine(host.store, zh: zh, for: cidNow), LocalTarot.pendingNote(host.store, companion: cidNow, zh: zh),
-                     LocalMusic.nowLine(host.store, zh: zh), LocalFocus.pendingNote(host.store, conversation: conv, zh: zh)] where !line.isEmpty {
+                     LocalMusic.nowLine(host.store, zh: zh), LocalFocus.pendingNote(host.store, conversation: conv, zh: zh),
+                     LocalRooms3.recapNote(host.store, companion: cidNow, conversation: conv, zh: zh)] where !line.isEmpty {
             req.context += "\n\n" + line
         }
         // 〔TA 那边〕天气 / 在哪 / 日程 / 步数和睡眠（10-04）：小号不给（那是平常的你那边）

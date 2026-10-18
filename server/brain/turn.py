@@ -31,6 +31,7 @@ from . import archive, attachments as files, books, context_line, diary, drawer,
 from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
 from . import chores, repeats
+from . import moments as MO
 from .context import ContextParts, build_request, render_volatile, user_tag
 from . import inner_voice, monologue
 from . import bilingual, group as G, groups, model_noise, timeline
@@ -525,6 +526,11 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         tarot_note = await _safe(tarot.pending_note(pool, comp, lang), "")
         if tarot_note:               # 塔罗（10-03）：TA 抽、它解好的那局，下一次开口递一次
             before = [*before, tarot_note]
+        since = state.get("moments_at")   # 朋友圈（10-18）：上次聊完以后跟它有关的新动静，递一次；它在朋友圈回过什么也在里面
+        moments_note = await _safe(_moments_recap(pool, acc, comp, since, now, lang), "")
+        if moments_note:
+            before = [*before, moments_note]
+        state["moments_at"] = now.isoformat()
         food_note = "" if quiet_food else await _safe(food_store.pending_note(pool, acc, now, lang), "")
         if food_note:                # 饮食：TA 刚记的 / 刚估好的，这一轮告诉它一次（09-29）
             before = [*before, food_note]
@@ -849,3 +855,8 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
     await archive.save_state(pool, state_key, state)
     await emit({"type": "ledger", "status": "done", "count": len(plan.rolled)})
     return True
+
+
+async def _moments_recap(pool, acc: UUID, comp: UUID, since: str | None, now: datetime, lang: str) -> str:
+    events = await MO.recap_events(pool, acc, comp, datetime.fromisoformat(since) if since else None, now)
+    return MO.render_recap(events, now, lang)
