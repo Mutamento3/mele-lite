@@ -25,7 +25,7 @@ public enum Monologue {
             return voice.isEmpty ? (mono, body)
                 : (mono, (body + "\n\n" + InnerVoice.contextLine(voice, zh: true)).trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        var (mono, body) = splitOnce(text)
+        var (mono, body) = splitOnce(closeNarration(text))
         guard !mono.isEmpty else { return (mono, body) }
         var monos = [mono]
         // 10-16 内测截图：第二段只写了开头的 [独白]、没收尾 → 原来要成对才接着切，那个 [独白] 连同后面的心里话原样漏进正文。
@@ -63,20 +63,70 @@ public enum Monologue {
         func has(_ re: NSRegularExpression, _ l: String) -> Bool {
             re.firstMatch(in: l, range: NSRange(location: 0, length: (l as NSString).length)) != nil
         }
-        var cut = 0, mentions = false
+        var cut = 0, lastMention = -1
         for (i, l) in lines.enumerated() {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.isEmpty { continue }
             if has(you, plain(t)) { cut = i; break }
             if t.hasPrefix("*") || t.hasPrefix("＊") { return none }
-            if zh ? plain(t).contains(p) : has(try! NSRegularExpression(pattern: "\\b\(p)\\b", options: [.caseInsensitive]), plain(t)) { mentions = true }
+            if zh ? plain(t).contains(p) : has(try! NSRegularExpression(pattern: "\\b\(p)\\b", options: [.caseInsensitive]), plain(t)) { lastMention = i }
             cut = i + 1
         }
+        // 10-19 内测截图：说出口的话里常常一个「你」都没有（「嗯，早点睡。」），原来从第一句带「你」的才算正文，
+        // 前面没「你」的话连同心里话一起收进了思考。现在独白只到最后一行提到 TA 的地方，后面的都还给正文
+        let mentions = lastMention >= 0
+        if mentions, lastMention + 1 < cut { cut = lastMention + 1 }
         guard mentions, cut > 0, cut < lines.count,
               lines[cut...].contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return none }
         let mono = lines[..<cut].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         let body = lines[cut...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return mono.isEmpty ? none : (mono, body)
+    }
+
+    /// 给 TA 回看的「说出口的话」（10-19）：旧版本漏进正文的心里话，进历史 / 腔调样本之前再洗一遍。
+    /// 不洗的话 TA 每轮都看见自己「这样说话」，越学越漏（内测 DeepSeek-V4-Pro 10-13 起：腔调样本改成从头到尾散着挑以后，
+    /// 又长又跟别的不像的漏段最容易被挑中）。pronoun 空着 = 不是手写独白，只切带标记的。跟 Host monologue.spoken_only 同一个
+    public static func spokenOnly(_ text: String, pronoun: String, zh: Bool) -> String {
+        var (mono, body) = split(text)
+        if mono.isEmpty, !pronoun.isEmpty { body = recoverUntagged(body, pronoun: pronoun, zh: zh).body }
+        return body
+    }
+
+    /// 腔调样本切过以后还像心里话：提到 TA 用第三人称、一个「你」都没有（引号里的不算）
+    public static func looksLikeThought(_ text: String, pronoun: String, zh: Bool) -> Bool {
+        guard !pronoun.isEmpty, zh || ["she", "he"].contains(pronoun.lowercased()) else { return false }
+        let plain = quoted.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: "")
+        let r = NSRange(location: 0, length: (plain as NSString).length)
+        if (zh ? saysYou : saysYouEN).firstMatch(in: plain, range: r) != nil { return false }
+        return zh ? plain.contains(pronoun)
+            : (try! NSRegularExpression(pattern: "\\b\(NSRegularExpression.escapedPattern(for: pronoun))\\b", options: [.caseInsensitive])).firstMatch(in: plain, range: r) != nil
+    }
+
+    /// 腔调样本：切掉漏进去的独白；切完还像心里话、或者切空了的整段不要
+    public static func cleanSamples(_ samples: [String], pronoun: String, zh: Bool) -> [String] {
+        samples.map { spokenOnly($0, pronoun: pronoun, zh: zh).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !looksLikeThought($0, pronoun: pronoun, zh: zh) }
+    }
+
+    /// 模型没写 [/独白]，而是用话把收尾「说」了出来（10-19 内测截图：气泡里只剩一句「结束。下面是对她说话，用"你"。」）：
+    /// 照着规矩里「写完独白换成对她说话」那句复述的。这种一整行只讲格式的话当成收尾标记，前面归独白、后面归正文，那一行本身不留。
+    /// 只认短的、讲「换成对 TA 说话 / 独白结束 / 下面是正文」的整行，正常说「结束了」不算
+    static let narrationZH = try! NSRegularExpression(
+        pattern: #"^[\s（(\[【*]*(?:内心)?(?:独白|獨白)\s*(?:到此|部分)?\s*(?:结束|結束|完毕|完畢|完)|(?:下面|接下来|接下來|以下|现在|現在)(?:是|换成|換成|开始|開始|转为|轉為)?(?:我)?(?:要)?(?:对|對)(?:她|他|TA)(?:说|說)(?:的)?话|^[\s（(\[【*]*(?:(?:结束|結束|完毕|完畢)[。．.!！，,\s]*)?(?:下面|接下来|接下來|以下)(?:是|为|為)?(?:正文|回复|回覆)"#)
+    static let narrationEN = try! NSRegularExpression(
+        pattern: #"^[\s(\[*]*(?:end of (?:the |my )?monologue|monologue (?:ends|over|done|end)\b|now (?:i'?m |i am )?(?:talking|speaking) to (?:her|him|them)\b|(?:below|here) is (?:the |my )?reply\b)"#,
+        options: [.caseInsensitive])
+    static func isNarration(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t.count <= 40 else { return false }
+        let r = NSRange(location: 0, length: (t as NSString).length)
+        return narrationZH.firstMatch(in: t, range: r) != nil || narrationEN.firstMatch(in: t, range: r) != nil
+    }
+    /// 讲格式的那一行换成 [/独白]，交给原来的切法
+    static func closeNarration(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        guard lines.contains(where: isNarration) else { return text }
+        return lines.map { isNarration($0) ? "[/独白]" : $0 }.joined(separator: "\n")
     }
 
     static let saysYouEN = try! NSRegularExpression(pattern: #"\byou(r|rs|rself)?\b"#, options: [.caseInsensitive])

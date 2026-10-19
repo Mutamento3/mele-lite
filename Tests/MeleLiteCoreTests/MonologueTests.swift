@@ -105,4 +105,35 @@ struct MonologueUntagged1016 {
         #expect(en.monologue == "She looks tired tonight." && en.body == "Hey, did you eat?")
         #expect(Monologue.recoverUntagged("They look tired.\nDid you eat?", pronoun: "they", zh: false).monologue.isEmpty)
     }
+    @Test func narrationAsClose_1019() {
+        // 10-19 内测截图：没写 [/独白]，用一句话把收尾说了出来，气泡里只剩那一句
+        let leak = "她今天又熬夜了。\n结束。下面是对她说话，用\"你\"。\n快去睡，听话。"
+        #expect(Monologue.split(leak).monologue == "她今天又熬夜了。" && Monologue.split(leak).body == "快去睡，听话。")
+        let open = "[独白]\n她累了。\n独白结束\n你先睡。"
+        #expect(Monologue.split(open).monologue == "她累了。" && Monologue.split(open).body == "你先睡。")
+        // 说出口的话写在那句前面：整段先归独白、正文空着（交给「没写正文再叫一次」）
+        #expect(Monologue.split("她累了。\n嗯，早点睡。\n下面是对她说的话").body.isEmpty)
+        #expect(Monologue.split("She's tired.\nEnd of monologue.\nGo to sleep.").body == "Go to sleep.")
+        // 正常说话里的「结束」「下面」不算
+        for keep in ["结束了。现在怎么办？", "下面我要对你说一件事。", "然后我对他说，别挡路。", "考试结束。下面去吃饭吧"] {
+            #expect(Monologue.split(keep).monologue.isEmpty && Monologue.split(keep).body == keep, "\(keep)")
+        }
+    }
+
+    @Test func recoverKeepsSpeechWithoutYou_1019() {
+        // 说出口的话常常没有「你」：独白只收到最后一行提到她的地方
+        let r = Monologue.recoverUntagged("她今天又熬夜了。\n她嘴上说没事。\n嗯，早点睡。\n明天叫你起床。", pronoun: "她", zh: true)
+        #expect(r.monologue == "她今天又熬夜了。\n她嘴上说没事。" && r.body == "嗯，早点睡。\n明天叫你起床。")
+    }
+
+    @Test func spokenOnlyAndSamples_1019() {
+        // 旧版本漏进正文的心里话：回看历史 / 腔调样本之前洗掉
+        let leak = "她又说睡不着。我知道她不是真的睡不着。\n那就再聊十分钟。\n十分钟之后我催你。"
+        #expect(Monologue.spokenOnly(leak, pronoun: "她", zh: true) == "那就再聊十分钟。\n十分钟之后我催你。")
+        #expect(Monologue.spokenOnly(leak, pronoun: "", zh: true) == leak)
+        #expect(Monologue.spokenOnly("[独白]她累了[/独白]\n你先睡", pronoun: "", zh: true) == "你先睡")
+        let samples = ["那就去睡吧。\n明天早上给你发消息。", "她说她妈让她考公。我听到这句心里沉了一下，像在念别人的台词。", leak]
+        #expect(Monologue.cleanSamples(samples, pronoun: "她", zh: true) == ["那就去睡吧。\n明天早上给你发消息。", "那就再聊十分钟。\n十分钟之后我催你。"])
+        #expect(Monologue.cleanSamples(["她说得对，你先睡。"], pronoun: "她", zh: true) == ["她说得对，你先睡。"])
+    }
 }

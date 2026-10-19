@@ -43,9 +43,10 @@ enum LocalEcho {
 
     /// 放进 system 的那段：账本 + 腔调样本
     /// me = 群里读账的那个 TA（10-11 群账本：用名字写的，告诉它哪个名字是它）
-    static func render(_ s: LocalStore, conversation conv: String, zh: Bool, userName: String, me: String? = nil) -> String {
+    /// pronoun = 手写独白时对方的人称（10-19）：样本里漏进去的心里话切掉、像心里话的整段不要；空着只切带标记的
+    static func render(_ s: LocalStore, conversation conv: String, zh: Bool, userName: String, me: String? = nil, pronoun: String = "") -> String {
         let ds = days(s, conv).filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
-        let samples = me == nil ? s.conversation(conv)?["echo_samples"] as? [String] ?? [] : []
+        let samples = me == nil ? Monologue.cleanSamples(s.conversation(conv)?["echo_samples"] as? [String] ?? [], pronoun: pronoun, zh: zh) : []
         var out: [String] = []
         if let me, !ds.isEmpty {
             out.append(zh ? "〔群账本〕群里更早的聊天，远的模糊、近的清楚（账里都写名字，「\(me)」就是你）："

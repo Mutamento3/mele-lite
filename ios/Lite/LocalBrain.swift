@@ -467,9 +467,17 @@ final class LocalBrain: @unchecked Sendable {
                 .suffix(3).last { !(($0["thinking"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
                 .flatMap { $0["id"] as? Int }
             : nil
+        // 旧版本漏进正文的心里话（10-19）：回看历史前洗掉，不让 TA 照着自己漏过的样子学（手写独白时才认没标记的）
+        let leakPronoun: String = switch settings["user_pronoun"] as? String {
+        case _ where !(monologue && group == nil): ""
+        case "she": zh ? "她" : "she"
+        case "he": zh ? "他" : "he"
+        default: zh ? "TA" : "they"
+        }
         var history: [Message] = stored.map {
             var text = ($0["role"] as? String) == "user" ? Bilingual.userSide($0["text"] as? String ?? "", $0["translations"] as? [Any])
                                                           : $0["text"] as? String ?? ""
+            if ($0["role"] as? String) == "assistant", group == nil { text = Monologue.spokenOnly(text, pronoun: leakPronoun, zh: zh) }
             if let id = lastMonoID, ($0["id"] as? Int) == id, let mono = $0["thinking"] as? String {
                 text = Monologue.wrap(mono.trimmingCharacters(in: .whitespacesAndNewlines), zh: zh) + "\n\n" + text
             }
@@ -633,7 +641,8 @@ final class LocalBrain: @unchecked Sendable {
         let moved = LocalImport.notesBlock(comp, zh: zh)
         if !moved.isEmpty { req.system += "\n\n" + moved }
         // 回声账本放 system 最后（10-05 对照服务器：壹层不变的在前、账本在后），卷一次只动尾巴
-        let echo = LocalEcho.render(host.store, conversation: conv, zh: zh, userName: identity.userName, me: group == nil ? nil : selfName)
+        let echo = LocalEcho.render(host.store, conversation: conv, zh: zh, userName: identity.userName, me: group == nil ? nil : selfName,
+                                    pronoun: leakPronoun)
         if !echo.isEmpty { req.system += "\n\n" + echo }
         // TA 刚做了什么、快到的远事（照服务器易变区那几样）；表情和拆信跟着窗口 / 联系人走，饮食钱包远事是平常的你，小号不给
         var notes = LocalNotes.reactionLines(host.store, conversation: conv, zh: zh) + LocalNotes.openedLines(host.store, companion: cidNow, zh: zh)

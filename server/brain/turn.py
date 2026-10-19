@@ -499,6 +499,9 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     mono_rules = (monologue.rules(settings, settings.thinking_style_text.strip()
                                   or thinking_style(settings, character=character))
                   if mode == "monologue" else "")
+    # 旧版本漏进正文的心里话（10-19）：回看历史前洗掉，不让 TA 照着自己漏过的样子学
+    history = [replace(m, text=monologue.spoken_only(m.text, untagged, lang == "zh"))
+               if m.role == "assistant" and group is None else m for m in history]
     hist, tools_note = history_msgs(history, lang)
     user_text_now = with_tools_note(tools_note, wake or text_for_model)
     if group is not None:            # 群：最后那几句（你和别的 TA 说的）就是这一轮要接的话；末尾是它自己的就提醒轮到它
@@ -577,7 +580,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                          life=settings.offline_life or settings.long_mode,   # 线下生活关着：没有出门吃饭那两行（10-05）
                          talk=settings.talk_rules),                         # 用户自己写的说话规矩（10-05）     # 长文模式：拿掉「说话」那一节（10-01 Aporia）
         ledger=ledger.render_group_ledger(await archive.get_ledger(pool, conv), lang, persona.name or "TA")
-        if group is not None else ledger.render_ledger(await archive.get_ledger(pool, conv), state.get("voice_samples", []), lang,
+        if group is not None else ledger.render_ledger(await archive.get_ledger(pool, conv), monologue.clean_samples(state.get("voice_samples", []), untagged, lang == "zh"), lang,
                                                          settings.user_name),
         history=hist,
         volatile=render_volatile(now=now, tz=settings.tz, lang=lang, recall=recall, sticky=sticky, lines=before),
@@ -613,7 +616,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             history = [m for m in history if m.id < 0 or m.id in left]
             hist, _ = history_msgs(history, lang)
             parts = replace(parts, history=squash(hist) if merged_rooms else hist,
-                            ledger=ledger.render_ledger(await archive.get_ledger(pool, conv), state.get("voice_samples", []),
+                            ledger=ledger.render_ledger(await archive.get_ledger(pool, conv), monologue.clean_samples(state.get("voice_samples", []), untagged, lang == "zh"),
                                                         lang, settings.user_name))
             req = build_request(parts, model=route.chat_model, thinking=mode == "native", user_tag=user_tag(acc), lang=lang)
             try:

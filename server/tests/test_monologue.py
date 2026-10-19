@@ -94,3 +94,36 @@ def test_recover_untagged_10_16():
     assert recover_untagged("「她说你好」这句我记得。\n你还记得吗", "她", True)[0] == ""                       # 引号里的她也不算
     assert recover_untagged("She looks tired tonight.\nHey, did you eat?", "she", False) == ("She looks tired tonight.", "Hey, did you eat?")
     assert recover_untagged("They look tired.\nDid you eat?", "they", False)[0] == ""   # they 太常见，不认
+
+
+def test_narration_as_close_10_19():
+    """没写 [/独白]，用一句话把收尾说了出来（10-19 内测截图）：那一行当收尾，不进气泡"""
+    from brain.monologue import split_monologue
+    assert split_monologue('她今天又熬夜了。\n结束。下面是对她说话，用"你"。\n快去睡，听话。') == ("她今天又熬夜了。", "快去睡，听话。")
+    assert split_monologue("[独白]\n她累了。\n独白结束\n你先睡。") == ("她累了。", "你先睡。")
+    assert split_monologue("她累了。\n嗯，早点睡。\n下面是对她说的话")[1] == ""      # 交给「没写正文再叫一次」
+    assert split_monologue("She's tired.\nEnd of monologue.\nGo to sleep.")[1] == "Go to sleep."
+    for keep in ("结束了。现在怎么办？", "下面我要对你说一件事。", "然后我对他说，别挡路。", "考试结束。下面去吃饭吧"):
+        assert split_monologue(keep) == ("", keep)
+
+
+def test_recover_keeps_speech_without_you_10_19():
+    """说出口的话常常没有「你」：独白只收到最后一行提到她的地方"""
+    from brain.monologue import recover_untagged
+    assert recover_untagged("她今天又熬夜了。\n她嘴上说没事。\n嗯，早点睡。\n明天叫你起床。", "她", True) == (
+        "她今天又熬夜了。\n她嘴上说没事。", "嗯，早点睡。\n明天叫你起床。")
+
+
+
+def test_spoken_only_and_samples_10_19():
+    """旧版本漏进正文的心里话：回看历史 / 腔调样本之前洗掉（10-13 起样本散着挑，漏段最容易被挑中）"""
+    from brain.monologue import clean_samples, spoken_only
+    leak = "她又说睡不着。我知道她不是真的睡不着。\n那就再聊十分钟。\n十分钟之后我催你。"
+    assert spoken_only(leak, "她", True) == "那就再聊十分钟。\n十分钟之后我催你。"
+    assert spoken_only(leak, "", True) == leak                                   # 不是手写独白：没标记的不动
+    assert spoken_only("[独白]她累了[/独白]\n你先睡", "", True) == "你先睡"
+    samples = ["那就去睡吧。\n明天早上给你发消息。",
+               "她说她妈让她考公。我听到这句心里沉了一下，像在念别人的台词。",   # 截断后只剩心里话：整段不要
+               leak]
+    assert clean_samples(samples, "她", True) == ["那就去睡吧。\n明天早上给你发消息。", "那就再聊十分钟。\n十分钟之后我催你。"]
+    assert clean_samples(["她说得对，你先睡。"], "她", True) == ["她说得对，你先睡。"]   # 有「你」：是对她说的话

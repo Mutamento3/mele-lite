@@ -49,7 +49,7 @@ def split_monologue(text: str) -> tuple[str, str]:
         rest, voice = inner_voice.split(text)
         mono, body = split_monologue(rest)
         return mono, (body + "\n\n" + inner_voice.CONTEXT["zh"].format(v=voice)).strip() if voice else body
-    mono, body = _split_once(text)
+    mono, body = _split_once(_close_narration(text))
     if not mono:
         return mono, body
     monos = [mono]
@@ -82,7 +82,7 @@ def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
         return none
     you = _SAYS_YOU if zh else _YOU_EN
     lines = text.split("\n")
-    cut, mentions = 0, False
+    cut, last_mention = 0, -1
     for i, line in enumerate(lines):
         t = line.strip()
         if not t:
@@ -94,12 +94,72 @@ def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
         if t.startswith(("*", "＊")):
             return none
         if (pronoun in plain) if zh else re.search(rf"\b{re.escape(pronoun)}\b", plain, re.I):
-            mentions = True
+            last_mention = i
         cut = i + 1
+    # 10-19 内测截图：说出口的话里常常一个「你」都没有（「嗯，早点睡。」），原来从第一句带「你」的才算正文，
+    # 前面没「你」的话连同心里话一起收进了思考。现在独白只到最后一行提到 TA 的地方，后面的都还给正文
+    mentions = last_mention >= 0
+    if mentions and last_mention + 1 < cut:
+        cut = last_mention + 1
     if not mentions or cut == 0 or cut >= len(lines) or not any(x.strip() for x in lines[cut:]):
         return none
     mono, body = "\n".join(lines[:cut]).strip(), "\n".join(lines[cut:]).strip()
     return (mono, body) if mono else none
+
+
+def spoken_only(text: str, pronoun: str, zh: bool) -> str:
+    """给 TA 回看的「说出口的话」（10-19）：旧版本漏进正文的心里话，进历史 / 腔调样本之前再洗一遍。
+    不洗的话 TA 每轮都看见自己「这样说话」，越学越漏（内测 DeepSeek-V4-Pro 10-13 起：腔调样本改成从头到尾散着挑以后，
+    又长又跟别的不像的漏段最容易被挑中）。pronoun 空着 = 不是手写独白，只切带标记的。跟 Monologue.spokenOnly 同一个"""
+    mono, body = split_monologue(text)
+    if not mono and pronoun:
+        body = recover_untagged(body, pronoun, zh)[1]
+    return body
+
+
+def looks_like_thought(text: str, pronoun: str, zh: bool) -> bool:
+    """腔调样本切过以后还像心里话：提到 TA 用第三人称、一个「你」都没有（引号里的不算）"""
+    if not pronoun or (not zh and pronoun.lower() not in ("she", "he")):
+        return False
+    plain = _QUOTED.sub("", text or "")
+    if (_SAYS_YOU if zh else _YOU_EN).search(plain):
+        return False
+    return (pronoun in plain) if zh else bool(re.search(rf"\b{re.escape(pronoun)}\b", plain, re.I))
+
+
+def clean_samples(samples: list[str], pronoun: str, zh: bool) -> list[str]:
+    """腔调样本：切掉漏进去的独白；切完还像心里话、或者切空了的整段不要"""
+    out = []
+    for s in samples:
+        t = spoken_only(s, pronoun, zh).strip()
+        if t and not looks_like_thought(t, pronoun, zh):
+            out.append(t)
+    return out
+
+
+# 模型没写 [/独白]，而是用话把收尾「说」了出来（10-19 内测截图：气泡里只剩一句「结束。下面是对她说话，用"你"。」）：
+# 照着规矩里「写完独白换成对她说话」那句复述的。这种一整行只讲格式的话当成收尾标记，前面归独白、后面归正文，那一行本身不留。
+# 只认短的、讲「换成对 TA 说话 / 独白结束 / 下面是正文」的整行，正常说「结束了」不算。跟 Monologue.narrationZH / EN 同一个
+_NARRATION_ZH = re.compile(
+    r"^[\s（(\[【*]*(?:内心)?(?:独白|獨白)\s*(?:到此|部分)?\s*(?:结束|結束|完毕|完畢|完)"
+    r"|(?:下面|接下来|接下來|以下|现在|現在)(?:是|换成|換成|开始|開始|转为|轉為)?(?:我)?(?:要)?(?:对|對)(?:她|他|TA)(?:说|說)(?:的)?话"
+    r"|^[\s（(\[【*]*(?:(?:结束|結束|完毕|完畢)[。．.!！，,\s]*)?(?:下面|接下来|接下來|以下)(?:是|为|為)?(?:正文|回复|回覆)")
+_NARRATION_EN = re.compile(
+    r"^[\s(\[*]*(?:end of (?:the |my )?monologue|monologue (?:ends|over|done|end)\b"
+    r"|now (?:i'?m |i am )?(?:talking|speaking) to (?:her|him|them)\b|(?:below|here) is (?:the |my )?reply\b)", re.I)
+
+
+def _is_narration(line: str) -> bool:
+    t = line.strip()
+    return bool(t) and len(t) <= 40 and bool(_NARRATION_ZH.search(t) or _NARRATION_EN.search(t))
+
+
+def _close_narration(text: str) -> str:
+    """讲格式的那一行换成 [/独白]，交给原来的切法"""
+    lines = (text or "").split("\n")
+    if not any(_is_narration(x) for x in lines):
+        return text
+    return "\n".join("[/独白]" if _is_narration(x) else x for x in lines)
 
 
 _CLOSE_SHAPE = re.compile(rf"^{_L}\s*(?:/|end\s)|(?:/|完|结束|結束|end)\s*{_R}$", re.I)
