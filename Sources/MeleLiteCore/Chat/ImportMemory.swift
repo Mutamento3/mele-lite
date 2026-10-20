@@ -199,6 +199,28 @@ public enum ClaudeMemories {
                 if let s = v as? String { out.append(s) }
             }
         }
+        // 认不出字段（10-20 内测：Claude 设置里「导出记忆」的 claude-memories-<日期>.zip，跟整份导出里的不是一个样子，
+        // 一起勾也报「认不出」）：只要哪一层的键名带 memor，就把它底下的文字都收下（编号、时间不算）
+        if out.isEmpty, !(any is [[String: Any]] && (any as! [[String: Any]]).contains { $0["chat_messages"] != nil || $0["mapping"] != nil }) {
+            collect(any, under: false, into: &out)
+        }
         return out.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    static let idLike = try! NSRegularExpression(pattern: #"^([0-9a-fA-F-]{20,}|\d{4}-\d{2}-\d{2}[T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?)$"#)
+
+    static func collect(_ v: Any, under: Bool, into out: inout [String]) {
+        switch v {
+        case let d as [String: Any]:
+            for (k, x) in d.sorted(by: { $0.key < $1.key }) { collect(x, under: under || k.lowercased().contains("memor"), into: &out) }
+        case let a as [Any]:
+            for x in a { collect(x, under: under, into: &out) }
+        case let s as String where under:
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard t.count >= 6, idLike.firstMatch(in: t, range: NSRange(location: 0, length: (t as NSString).length)) == nil else { return }
+            out.append(t)
+        default:
+            return
+        }
     }
 }

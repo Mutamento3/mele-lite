@@ -60,6 +60,12 @@ enum LocalImport {
                                           "cost": NSNull(), "conversations": [[String: Any]]()]
             return .success(Read(draft: draft, preview: preview, chars: 0))
         }
+        // 一起勾了好几个、其中有认不出的（10-20 内测：记忆包没认出来，连着 conversations.json 一起报「认不出」）：
+        // 认得出的照常搬，认不出的那几个跳过；一个都认不出才走下面的报错 / 当笔记收
+        if chats.count > 1, (try? ChatImport.parse(chats)) == nil {
+            let ok = chats.filter { (try? ChatImport.parse($0)) != nil }
+            if !ok.isEmpty, (try? ChatImport.parse(ok)) != nil { chats = ok }
+        }
         let got: (source: ChatSource, conversations: [ImportedConversation])
         do { got = try ChatImport.parse(chats) } catch ChatImportError.mixed {
             return .failure(Failure(message: String(localized: "一次只能搬一家：不同 App 的包分开搬")))

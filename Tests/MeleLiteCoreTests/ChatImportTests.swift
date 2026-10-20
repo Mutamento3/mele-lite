@@ -144,6 +144,11 @@ import Testing
         #expect(try ClaudeMemories.parse(Data(#"[{"conversations_memory":"小满喜欢秋天。"}]"#.utf8)) == ["小满喜欢秋天。"])
         #expect(try ClaudeMemories.parse(Data(#"{"title":"别的东西"}"#.utf8)).isEmpty)
         #expect(try ClaudeMemories.parse(Data(#"[{"uuid":"x","name":"对话"}]"#.utf8)).isEmpty)
+        // 字段名跟整份导出的不一样（设置里「导出记忆」那种）：键名带 memor 的底下的文字都收，编号 / 时间不收
+        let other = Data(#"{"uuid":"ec991c08-4cd9-46ca-9f00-000000000032","created_at":"2026-10-20T12:00:00Z","memories":[{"id":"ec991c08-4cd9-46ca-9f00-000000000033","content":"小满在读高三，喜欢秋天。","updated_at":"2026-10-20T12:00:00.123Z"}]}"#.utf8)
+        #expect(try ClaudeMemories.parse(other) == ["小满在读高三，喜欢秋天。"])
+        #expect(try ClaudeMemories.parse(Data(#"{"memory":"小满养了一只橘猫叫年糕。"}"#.utf8)) == ["小满养了一只橘猫叫年糕。"])
+        #expect(try ClaudeMemories.parse(Data(#"[{"uuid":"x","name":"对话","chat_messages":[{"text":"memory 这个词"}]}]"#.utf8)).isEmpty)
     }
 
     @Test func chunksKeepSpeakersAndDatesAndStayUnderSize() {
