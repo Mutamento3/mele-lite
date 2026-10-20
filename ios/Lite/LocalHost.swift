@@ -65,6 +65,7 @@ final class LocalHost: @unchecked Sendable {
         case ("GET", 3) where p[0] == "conversations" && p[2] == "search": return search(p[1], r.query["q"] ?? "")
         case ("GET", 3) where p[0] == "conversations" && p[2] == "calendar": return calendar(p[1])
         case ("POST", 3) where p[0] == "conversations" && p[2] == "rewind": return brain.rewind(p[1], r.json)
+        case ("POST", 3) where p[0] == "conversations" && p[2] == "recall": return brain.recall(p[1], r.json)
         case ("GET", 2) where p[0] == "attachments": return attachment(p[1])
         // ── 消息上的小动作 ──
         case ("PUT", 3) where p[0] == "messages" && p[2] == "reaction": return react(Int(p[1]), r.json["emoji"] as? String, bubble: r.json["bubble"] as? Int)

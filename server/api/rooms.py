@@ -26,6 +26,7 @@ Runner = Callable[[str, bool, Callable[[dict], Awaitable[None]], list, list], Aw
 @dataclass
 class Room:
     pending: list[str] = field(default_factory=list)
+    pending_ids: list = field(default_factory=list)    # 跟 pending 一一对应的 client_id（撤回用，10-20）；没带的是 None
     files: list = field(default_factory=list)          # 跟着排着的话一起来的附件编号
     last_at: float = 0.0                      # 最后一条进来的时间（loop.time()）
     wait: float = 0.0
@@ -86,6 +87,7 @@ class Rooms:
         r.runner = runner
         if text:
             r.pending.append(text)
+            r.pending_ids.append(client_id)
         r.files.extend(attachments or [])
         r.last_at = loop.time()
         r.wait = wait_seconds * self.wait_scale
@@ -94,6 +96,19 @@ class Rooms:
         idle = not (r.running and not r.running.done()) and not (r.timer and not r.timer.done())
         if idle:                         # 已经在等的话不用动：计时器醒来会按新的 last_at 接着等
             self._arm(conv, r)
+        return True
+
+    def withdraw(self, conv: UUID, client_id: str) -> bool:
+        """撤回还在等候区里的一句（10-20，照之前自用的 App）：它还没看到，直接拿掉。拿空了连计时也停，不然会拿空话跑一轮。
+        已经被拿去跑了（不在等候区）返回 False。"""
+        r = self.rooms.get(conv)
+        if not r or not client_id or client_id not in r.pending_ids:
+            return False
+        i = r.pending_ids.index(client_id)
+        del r.pending[i], r.pending_ids[i]
+        if not r.pending and not r.files and r.timer and not r.timer.done():
+            r.timer.cancel()
+            r.timer = None
         return True
 
     def run_now(self, conv: UUID, runner: Runner, *, resend: bool) -> None:
@@ -112,6 +127,7 @@ class Rooms:
             await asyncio.sleep(left)
         parts, files = list(r.pending), list(r.files)
         r.pending.clear()
+        r.pending_ids.clear()
         r.files.clear()
         r.timer = None
         r.running = asyncio.current_task()

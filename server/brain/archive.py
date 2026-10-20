@@ -133,6 +133,13 @@ async def neighbours(pool, user_id: UUID, message_id: int) -> tuple[StoredMsg | 
     return (_msg(prev) if prev else None, _msg(nxt) if nxt else None)
 
 
+async def delete_message(pool, owner: UUID, message_id: int) -> bool:
+    """撤回用（10-20，照之前自用的 App）：只删这一句（还没卷进账本、是用户自己说的），别的不动。"""
+    status = await pool.execute("DELETE FROM chat_messages WHERE user_id = $1 AND id = $2 AND role = 'user' AND NOT rolled",
+                                owner, message_id)
+    return status.split()[-1] != "0"
+
+
 async def delete_messages_after(pool, owner: UUID, message_id: int) -> int:
     """倒回用：删掉这个窗口里比 message_id 新的所有消息（只删还没卷进账本的）。"""
     status = await pool.execute("DELETE FROM chat_messages WHERE user_id = $1 AND id > $2 AND NOT rolled",

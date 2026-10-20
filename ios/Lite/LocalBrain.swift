@@ -14,6 +14,7 @@ final class LocalBrain: @unchecked Sendable {
     private final class Room {
         var listeners: [UUID: AsyncStream<Data>.Continuation] = [:]
         var pending: [String] = []
+        var pendingIDs: [String?] = []     // 跟 pending 一一对应的 client_id（撤回用，10-20）
         var files: [String] = []
         var seen: Set<String> = []
         var timer: Task<Void, Never>?
@@ -144,7 +145,7 @@ final class LocalBrain: @unchecked Sendable {
         lock.withLock {
             if let clientID, r.seen.contains(clientID) { queued = false; return }
             if let clientID { r.seen.insert(clientID) }
-            if !text.isEmpty { r.pending.append(text) }
+            if !text.isEmpty { r.pending.append(text); r.pendingIDs.append(clientID) }
             r.files.append(contentsOf: files)
             if isGroup, r.running != nil { r.interrupt = true }
             r.timer?.cancel()
@@ -162,7 +163,7 @@ final class LocalBrain: @unchecked Sendable {
         let r = room(conv)
         let (parts, files, busy): ([String], [String], Bool) = lock.withLock {
             guard r.running == nil else { return ([], [], true) }       // 上一轮还在跑：等它跑完再 flush
-            defer { r.pending = []; r.files = [] }
+            defer { r.pending = []; r.pendingIDs = []; r.files = [] }
             return (r.pending, r.files, false)
         }
         guard !parts.isEmpty || !files.isEmpty else {
@@ -214,6 +215,52 @@ final class LocalBrain: @unchecked Sendable {
         }
         lock.withLock { r.running = task }
         return .json(["kind": "regenerate"])
+    }
+
+    // MARK: 撤回（10-20，照之前自用的 App；Host 同一个 /recall）：只删 TA 自己的这一句，它的回复都留着。
+    // 它还没读到（后面没有它的话、也不在回）就悄悄删；读过了，像微信那样递一句「撤回了哪句」让它接（私聊才说，群里只删）
+
+    func recall(_ conv: String, _ body: [String: Any]) -> LocalResponse {
+        // 刚发出去、还在「等你说完」里的那句：它还没看到，直接拿掉；拿空了连计时也停（不然会拿空话跑一轮）
+        if let cid = body["client_id"] as? String, !cid.isEmpty {
+            let r = room(conv)
+            let (took, empty) = lock.withLock { () -> (Bool, Bool) in
+                guard let i = r.pendingIDs.firstIndex(of: cid) else { return (false, false) }
+                r.pending.remove(at: i); r.pendingIDs.remove(at: i)
+                let empty = r.pending.isEmpty && r.files.isEmpty && r.running == nil
+                if empty { r.timer?.cancel(); r.timer = nil }
+                return (true, empty)
+            }
+            guard took else { return .error(409, String(localized: "TA 已经开始看了，等它回完再撤回")) }
+            if empty { letGo(conv) }
+            return .json(["recalled": NSNull(), "told": false])
+        }
+        guard let mid = body["message_id"] as? Int else { return .error(400, "要带 message_id") }
+        var list = host.store.messages(conv)
+        guard let i = list.firstIndex(where: { ($0["id"] as? Int) == mid }), (list[i]["role"] as? String) == "user",
+              mid > LocalEcho.rolledUpto(host.store, conv) else {
+            return .error(400, String(localized: "只能撤回自己说的、还没卷进账本的话"))
+        }
+        let text = (list[i]["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let read = busy(conv) || list[(i + 1)...].contains { ($0["role"] as? String) == "assistant" }
+        list.remove(at: i)
+        host.store.saveMessages(conv, list)
+        let isGroup = LocalGroups.group(host.store, conv) != nil
+        let incognito = host.store.conversation(conv)?["incognito"] as? Bool ?? false
+        let told = read && !isGroup && !incognito
+        if told, let comp = host.companion(ofConversation: conv) {
+            let st = comp["settings"] as? [String: Any] ?? [:]
+            let zh = (st["lang"] as? String ?? "zh") == "zh"
+            let p: String = switch st["user_pronoun"] as? String {
+            case "she": zh ? "她" : "She"
+            case "he": zh ? "他" : "He"
+            default: zh ? "TA" : "They"
+            }
+            let said = text.count > 300 ? String(text.prefix(300)) : text
+            poke(conv, nudge: zh ? "〔\(p)撤回了一条消息：「\(said)」〕\n你刚才已经看到了。像微信里对方撤回那样，照你自己的样子接就好。"
+                                 : "[\(p) unsent a message: \"\(said)\"]\nYou'd already seen it. Like when someone unsends a message in a chat app — respond however you naturally would.")
+        }
+        return .json(["recalled": mid, "told": told])
     }
 
     /// 不等 TA 说话，直接跑一轮（查手机答复、加好友后它先开口）：nudge = 递给它的一句旁白（不存），peek = 翻到的东西

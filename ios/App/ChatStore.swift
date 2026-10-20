@@ -584,6 +584,41 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// 这一行是不是刚发出去、还没存下来的那句（只有文字的才能撤：带图的一起排着，拿不开）
+    func isRecallableEcho(_ rowID: Int) -> Bool {
+        echoes.contains { $0.id == rowID && $0.attachments.isEmpty }
+    }
+
+    /// 撤回还在「等你说完」里的那句（10-20）：TA 还没看到，等候区里拿掉就行
+    func recallEcho(_ rowID: Int) async {
+        guard let echo = echoes.first(where: { $0.id == rowID }) else { return }
+        do {
+            let _: [String: Bool?] = try await api.call("POST", "\(path)/recall", json: ["client_id": echo.clientID])
+            echoes.removeAll { $0.id == rowID }
+            if echoes.isEmpty && live.isEmpty { typing = false }
+            rebuild()
+        } catch let e as APIError where e.status == 404 {
+            errorText = String(localized: "这台 Host 还没有撤回：先在服务器上跑一次 mele-host update")
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    /// 撤回自己的一句（10-20，照之前自用的 App）：只删这一句，TA 的回复都留着；TA 读过了，那边会递一句「撤回了」让它接
+    func recall(messageID: Int) async {
+        struct Out: Decodable { let recalled: Int; let told: Bool }
+        do {
+            let out: Out = try await api.call("POST", "\(path)/recall", json: ["message_id": messageID])
+            messages.removeAll { $0.id == messageID }
+            if out.told { typing = true }
+            rebuild()
+        } catch let e as APIError where e.status == 404 {
+            errorText = String(localized: "这台 Host 还没有撤回：先在服务器上跑一次 mele-host update")
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
     // MARK: - 事件流
 
     private func startStream() {

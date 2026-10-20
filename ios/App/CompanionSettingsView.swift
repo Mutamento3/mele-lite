@@ -277,6 +277,8 @@ struct CompanionSettingsView: View {
     @State private var picked: PhotosPickerItem?
     @State private var addingClock = false
     @State private var toneOpen = false          // 温暖 / 主动 / 幽默：收在性格下面，点开才出来（10-03）
+    @State private var personalityOpen = false   // 性格 / 导入的卡太长默认收起（10-20 内测：设定太长，每次要划很久才到下面的开关）
+    @State private var importedOpen = false
     @State private var customRel = ""
     @State private var writingOwn = false       // 出厂性格清空了、正在自己写
     @State private var wechatDraft = ""         // 微信号先在本地编辑，合法才存（10-11）
@@ -443,6 +445,25 @@ struct CompanionSettingsView: View {
         #endif
     }
 
+    /// 长设定默认收起（10-20 内测）：收着是一个固定高的框，在框里也能滑、能改；点「展开全部」才整段铺开
+    @ViewBuilder
+    private func foldingEditor(_ text: Binding<String>, open: Binding<Bool>) -> some View {
+        let long = text.wrappedValue.count > 240 || text.wrappedValue.split(separator: "\n", omittingEmptySubsequences: false).count > 8
+        TextEditor(text: text)
+            .font(Typo.sans(Typo.Size.callout))
+            .frame(minHeight: 120, maxHeight: long && !open.wrappedValue ? 160 : .infinity)
+            .scrollContentBackground(.hidden)
+        if long {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { open.wrappedValue.toggle() }
+            } label: {
+                Label(open.wrappedValue ? "收起" : "展开全部", systemImage: open.wrappedValue ? "chevron.up" : "chevron.down")
+            }
+            .font(Typo.sans(Typo.Size.callout))
+            .foregroundStyle(theme.accentDeep)
+        }
+    }
+
     private var who: some View {
         Tile {
             // 出厂性格是底子，看不见（09-29 Aporia）：服务器只说「还是出厂的」，想自己写就清空重写；写空了 = 回到出厂
@@ -460,10 +481,7 @@ struct CompanionSettingsView: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     row("性格", "你写的 TA：是什么样的人、怎么说话")
-                    TextEditor(text: store.p("personality", ""))
-                        .font(Typo.sans(Typo.Size.callout))
-                        .frame(minHeight: 120)
-                        .scrollContentBackground(.hidden)
+                    foldingEditor(store.p("personality", ""), open: $personalityOpen)
                     HStack(spacing: 18) {
                         Button("恢复出厂") {
                             store.p("personality", "").wrappedValue = ""
@@ -501,10 +519,7 @@ struct CompanionSettingsView: View {
             if !((store.persona["imported"] as? String) ?? "").isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     row("导入的卡", "从角色卡带来的设定，跟上面的性格一起生效。想改就改")
-                    TextEditor(text: store.p("imported", ""))
-                        .font(Typo.sans(Typo.Size.callout))
-                        .frame(minHeight: 100)
-                        .scrollContentBackground(.hidden)
+                    foldingEditor(store.p("imported", ""), open: $importedOpen)
                     Button("删掉卡设定", role: .destructive) {
                         store.p("imported", "").wrappedValue = ""
                     }

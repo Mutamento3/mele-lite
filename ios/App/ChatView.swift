@@ -1696,6 +1696,24 @@ struct ChatView: View {
                     Label("重新回", systemImage: "arrow.clockwise")
                 }
             }
+            // 撤回（10-20，照之前自用的 App）：只撤这一句，TA 的回复留着；TA 看过了会知道你撤回了
+            if item.mine {
+                Button(role: .destructive) {
+                    closeActions(refocus: false)
+                    Task { await chat.recall(messageID: mid) }
+                } label: {
+                    Label("撤回", systemImage: "arrow.uturn.backward")
+                }
+            }
+        }
+        // 刚发出去、还在「等你说完」里的那句：TA 还没看到，撤回就是悄悄拿掉
+        if item.mine, item.messageID == nil, chat.isRecallableEcho(item.id) {
+            Button(role: .destructive) {
+                closeActions(refocus: false)
+                Task { await chat.recallEcho(item.id) }
+            } label: {
+                Label("撤回", systemImage: "arrow.uturn.backward")
+            }
         }
         }   // !isMoment
     }

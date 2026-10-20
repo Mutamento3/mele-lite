@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from brain import accounts, archive, attachments, books, groups, reactions, rewind
+from brain import accounts, archive, attachments, books, groups, monologue, reactions, rewind
 from brain.group_run import run_group
 from brain import voice
 from brain.bubbles import split_reply
@@ -232,6 +232,53 @@ async def do_rewind(conv: UUID, body: dict = Body(...), acc: UUID = Depends(acco
         raise HTTPException(400, str(e)) from e
     a.rooms.run_now(conv, _runner(a, scope), resend=True)
     return {"kind": "regenerate"}
+
+
+RECALL_NOTE = {
+    "zh": "〔{p}撤回了一条消息：「{text}」〕\n你刚才已经看到了。像微信里对方撤回那样，照你自己的样子接就好。",
+    "en": "[{p} unsent a message: \"{text}\"]\nYou'd already seen it. Like when someone unsends a message in a chat app — respond however you naturally would.",
+}
+
+
+@router.post("/conversations/{conv}/recall")
+async def do_recall(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """撤回自己的一句（10-20，照之前自用的 App）：只删这一句，它的回复都留着。
+    它还没读到（后面没有它的话、也不在回）就悄悄删；读过了，像微信那样告诉它撤回了哪句（私聊才说，群里只删）。"""
+    scope = await own_conversation(a, acc, conv)
+    if body.get("client_id"):        # 刚发出去、还在「等你说完」里的那句：它还没看到，直接拿掉
+        if a.rooms.withdraw(conv, str(body["client_id"])):
+            return {"recalled": None, "told": False}
+        raise HTTPException(409, "TA 已经开始看了，等它回完再撤回")
+    try:
+        mid = int(body["message_id"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "要带 message_id") from None
+    msgs = await archive.unrolled(a.deps.pool, conv)
+    target = next((m for m in msgs if m.id == mid), None)
+    if target is None or target.role != "user":
+        raise HTTPException(400, "只能撤回自己说的、还没卷进账本的话")
+    read = a.rooms.busy(conv) or any(m.id > mid and m.role == "assistant" for m in msgs)
+    if not await archive.delete_message(a.deps.pool, conv, mid):
+        raise HTTPException(400, "这条撤不回了")
+    told = read and scope.companion is not None and not scope.incognito
+    if told:
+        s = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))
+        p = (monologue._ZH_PRONOUN.get(s.user_pronoun, "TA") if s.lang == "zh" else
+             {"she": "She", "he": "He"}.get(s.user_pronoun, "They"))
+        note = RECALL_NOTE[s.lang if s.lang in RECALL_NOTE else "zh"].format(p=p, text=target.text.strip()[:300])
+        asyncio.create_task(_after_recall(a, scope, note))
+    return {"recalled": mid, "told": told}
+
+
+async def _after_recall(a: Api, scope, note: str) -> None:
+    """它正在回的话等它说完（最多 5 分钟），再递一句「撤回了」让它接（借巡逻醒来那条路，说完照常存）"""
+    for _ in range(600):
+        if not a.rooms.busy(scope.conversation):
+            break
+        await asyncio.sleep(0.5)
+    ran, out = await a.rooms.run_exclusive(scope.conversation, lambda emit: run_turn(a.deps, scope, "", emit, wake=note))
+    if ran and out is not None and out.said:
+        await accounts.touch_conversation(a.deps.pool, scope.conversation, a.deps.now())
 
 
 def _bubble(raw) -> int:

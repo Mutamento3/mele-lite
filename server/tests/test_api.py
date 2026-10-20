@@ -236,6 +236,46 @@ async def test_rewind_edit_and_regenerate(pool):
         assert (await c.post(f"/conversations/{cid}/rewind", json={"message_id": 999999})).status_code == 400
 
 
+async def test_recall_keeps_reply_and_tells_it(pool):
+    """撤回自己的一句（10-20，照之前自用的 App）：只删这一句，它的回复留着；它读过了 → 递一句「撤回了」让它接"""
+    e = Env(pool, ["第一次的回答", "嗯，看到了"])
+    t = await e.login()
+    async with e.client(t) as c:
+        lumi, conv = await e.first_window(c)
+        cid = conv["id"]
+        await c.patch(f"/companions/{lumi['id']}", json={"settings": {"reply_wait": 0}})
+        await c.post(f"/conversations/{cid}/messages", json={"text": "发错了这句"})
+        await e.rooms.idle(UUID(cid))
+        user, reply = (await c.get(f"/conversations/{cid}/messages")).json()["messages"]
+        assert (await c.post(f"/conversations/{cid}/recall", json={"message_id": reply["id"]})).status_code == 400
+        r = await c.post(f"/conversations/{cid}/recall", json={"message_id": user["id"]})
+        assert r.json() == {"recalled": user["id"], "told": True}
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            await e.rooms.idle(UUID(cid))
+            texts = [m["text"] for m in (await c.get(f"/conversations/{cid}/messages")).json()["messages"]]
+            if "嗯，看到了" in texts:
+                break
+        assert "发错了这句" not in texts and "第一次的回答" in texts and "嗯，看到了" in texts
+        assert (await c.post(f"/conversations/{cid}/recall", json={"message_id": 999999})).status_code == 400
+
+
+async def test_recall_while_waiting_is_silent(pool):
+    """还在「等你说完」里的那句（10-20）：按 client_id 拿掉，它没看到、不跑这一轮；拿完了再撤回 = 409"""
+    e = Env(pool, ["不该出现的回答"])
+    t = await e.login()
+    async with e.client(t) as c:
+        lumi, conv = await e.first_window(c)
+        cid = conv["id"]
+        await c.patch(f"/companions/{lumi['id']}", json={"settings": {"reply_wait": 30}})
+        await c.post(f"/conversations/{cid}/messages", json={"text": "发错了", "client_id": "abc"})
+        r = await c.post(f"/conversations/{cid}/recall", json={"client_id": "abc"})
+        assert r.json() == {"recalled": None, "told": False}
+        await e.rooms.idle(UUID(cid))
+        assert (await c.get(f"/conversations/{cid}/messages")).json()["messages"] == []
+        assert (await c.post(f"/conversations/{cid}/recall", json={"client_id": "abc"})).status_code == 409
+
+
 async def test_incognito_window_closes_clean(pool):
     e = Env(pool, ["悄悄话收到"])
     t = await e.login()
