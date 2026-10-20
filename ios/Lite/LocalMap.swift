@@ -137,10 +137,16 @@ enum LocalMap {
         let since = n["time"] as? String ?? ""
         let mins = minutes(f.string(from: Date())) - minutes(since)
         // 不给「接下来去哪」（10-13 内测第二张截图：它手里唯一「自己的事」就是下一站，撑话头时每轮都拿「等天黑去河边走走」出来）
-        let clock = since.isEmpty || mins < 0 ? "" : (zh ? "\(since) 到这儿的，已经 \(elapsed(mins, zh: zh))" : "here since \(since), \(elapsed(mins, zh: zh)) so far")
+        // 10-20 内测截图：写「13:55 到这儿的」，DeepSeek 把 13:55 当成了现在（思考开头「一点五十五了」），15:58 还在说锅里的面——
+        // 不给钟点，只说来了多久；来了一小时以上，来时在干的那件事算早过去了，不再当成此刻在干
+        let stale = mins >= 60 && !doing.isEmpty
+        let clock = since.isEmpty || mins < 0 ? ""
+            : zh ? "来了 \(elapsed(mins, zh: true))" + (stale ? "；刚来时\(doing)，那是 \(elapsed(mins, zh: true))前的事了" : "")
+                 : "been here \(elapsed(mins, zh: false))" + (stale ? "; you came to \(doing), but that was \(elapsed(mins, zh: false)) ago" : "")
+        let shown = stale ? "" : doing
         return zh
-            ? "〔现在〕你在「\(name)」\(doing.isEmpty ? "" : "，\(doing)")\(clock.isEmpty ? "" : "（\(clock)）")。这只是背景：不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。要挪地方——你自己想去哪，或 TA 说你在别处而你接受了——就用 go_to，不然下一句你还在这儿。"
-            : "[Right now] You're at \"\(name)\"\(doing.isEmpty ? "" : ", \(doing)")\(clock.isEmpty ? "" : " (\(clock))"). Background only: don't mention it every line, don't repeat what you just said; as time passes things naturally move on (done eating, on the way). To change place — you want to go somewhere, or they say you're elsewhere and you go with it — use go_to, or you'll still be here next line."
+            ? "〔现在〕你在「\(name)」\(shown.isEmpty ? "" : "，\(shown)")\(clock.isEmpty ? "" : "（\(clock)）")。这只是背景：不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。要挪地方——你自己想去哪，或 TA 说你在别处而你接受了——就用 go_to，不然下一句你还在这儿。"
+            : "[Right now] You're at \"\(name)\"\(shown.isEmpty ? "" : ", \(shown)")\(clock.isEmpty ? "" : " (\(clock))"). Background only: don't mention it every line, don't repeat what you just said; as time passes things naturally move on (done eating, on the way). To change place — you want to go somewhere, or they say you're elsewhere and you go with it — use go_to, or you'll still be here next line."
     }
 
     static func minutes(_ hm: String) -> Int {

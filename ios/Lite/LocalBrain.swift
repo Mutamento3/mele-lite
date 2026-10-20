@@ -666,6 +666,7 @@ final class LocalBrain: @unchecked Sendable {
         // 独白的提醒压在最最后（10-12：之前排在饮食 / 人物卡 / 人设锚前面，一长就被盖住，一会写一会不写）
         if monologue { req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun) }
         var text = "", thinking = ""
+        var rounds: [String] = []                       // 每个工具来回各说的那段（10-20：独白要一段一段切，见下面）
         var cards: [[String: Any]] = []
         var drawn: [String] = []                        // 这一轮它画的图（附件号，10-15）：跟它的话一起存
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
@@ -713,12 +714,12 @@ final class LocalBrain: @unchecked Sendable {
                         NSLog("[tools] 文字写的调用 \(found.map(\.name))，替它调了 \(calls.map(\.name))")
                     }
                 }
-                if !said.isEmpty { text += (text.isEmpty ? "" : "\n\n") + said }
+                if !said.isEmpty { text += (text.isEmpty ? "" : "\n\n") + said; rounds.append(said) }
                 if calls.isEmpty, group == nil, !retriedEmpty,
                    InnerVoice.split(Monologue.split(ModelNoise.strip(text)).body).body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     // 10-12 内测：想到一半就停了，正文是空的，什么都没发出来、记录停在你那句上。这一段不留（第二次会重写）
                     retriedEmpty = true
-                    text = ""; thinking = ""
+                    text = ""; thinking = ""; rounds = []
                     req.context += "\n\n" + (zh ? "（你刚才没写出正文就停了。照常写，写完一定接着写要对\(pronoun)说的话。）"
                                                   : "(You stopped before writing the reply. Go ahead as usual, and make sure you finish with what you want to say.)")
                     continue
@@ -730,6 +731,7 @@ final class LocalBrain: @unchecked Sendable {
                     retriedNoMono = true
                     NSLog("[monologue] 没写独白，填好开头再叫一次")
                     text = ""
+                    rounds = []
                     req.tools = []
                     req.assistantPrefix = zh ? "[独白]\n" : "[monologue]\n"
                     continue
@@ -779,10 +781,21 @@ final class LocalBrain: @unchecked Sendable {
 
         text = ModelNoise.strip(text)                   // 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
         // 独白切下来当思考，正文才发出去、才进历史。没选手写独白也切（10-12 内测：人设 / 旧历史里有标签，模型照写，[/独白] 漏进气泡）
-        var (mono, body) = Monologue.split(text)
-        if mono.isEmpty, monologue, group == nil {      // 一个标记都没写、心里话混进正文开头（10-16 内测）
-            (mono, body) = Monologue.recoverUntagged(body, pronoun: pronoun, zh: zh)
+        // 10-20 内测（DeepSeek-V4-Pro + 接了别的记忆库）：先写 [独白]、调记忆工具、回来再写一段没标记的心里话 + 正文。
+        // 原来拼成一整段只切一次：第一段有独白就当这次有了，第二段的心里话原样进了气泡。现在照 Host tool_loop，每段各切各的
+        var monos: [String] = [], bodies: [String] = []
+        for r in (rounds.isEmpty ? [text] : rounds) {
+            var (m, b) = Monologue.split(ModelNoise.strip(r))
+            // 没写标记、心里话混进正文开头（10-16 内测）；写了一段 [独白] 后面又接一段没标记的心里话也算（10-20 内测）
+            if monologue, group == nil {
+                let (m2, b2) = Monologue.recoverUntagged(b, pronoun: pronoun, zh: zh)
+                if !m2.isEmpty { m = [m, m2].filter { !$0.isEmpty }.joined(separator: "\n\n"); b = b2 }
+            }
+            if !m.isEmpty { monos.append(m) }
+            if !b.isEmpty { bodies.append(b) }
         }
+        let mono = monos.joined(separator: "\n\n")
+        let body = bodies.joined(separator: "\n\n")
         if !mono.isEmpty { thinking += (thinking.isEmpty ? "" : "\n\n") + mono }
         text = body
         var innerVoiceText = ""                         // 心声（10-11）：最后那段切下来，不进气泡、不念；没开也切掉，只是不发卡

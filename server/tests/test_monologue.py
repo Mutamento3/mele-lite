@@ -127,3 +127,5 @@ def test_spoken_only_and_samples_10_19():
                leak]
     assert clean_samples(samples, "她", True) == ["那就去睡吧。\n明天早上给你发消息。", "那就再聊十分钟。\n十分钟之后我催你。"]
     assert clean_samples(["她说得对，你先睡。"], "她", True) == ["她说得对，你先睡。"]   # 有「你」：是对她说的话
+    assert spoken_only("[独白]她累了[/独白]\n她嘴上说没事。\n你先睡", "她", True) == "你先睡"    # 带标记的后面又一段没标记的（10-20）
+

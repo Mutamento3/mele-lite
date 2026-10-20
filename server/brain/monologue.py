@@ -111,8 +111,8 @@ def spoken_only(text: str, pronoun: str, zh: bool) -> str:
     """给 TA 回看的「说出口的话」（10-19）：旧版本漏进正文的心里话，进历史 / 腔调样本之前再洗一遍。
     不洗的话 TA 每轮都看见自己「这样说话」，越学越漏（内测 DeepSeek-V4-Pro 10-13 起：腔调样本改成从头到尾散着挑以后，
     又长又跟别的不像的漏段最容易被挑中）。pronoun 空着 = 不是手写独白，只切带标记的。跟 Monologue.spokenOnly 同一个"""
-    mono, body = split_monologue(text)
-    if not mono and pronoun:
+    _, body = split_monologue(text)
+    if pronoun:                     # 写了 [独白] 后面又接一段没标记的心里话也切（10-20）
         body = recover_untagged(body, pronoun, zh)[1]
     return body
 

@@ -151,8 +151,10 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
         if reply.thinking.strip():
             thinking.append(reply.thinking.strip())
         mono, said = monologue.split_monologue(reply.text)    # 手写独白：切下来当思考链；调工具前那一段也要切
-        if not mono and untagged:                              # 一个标记都没写、心里话混进正文开头（10-16）
-            mono, said = monologue.recover_untagged(said, untagged, lang == "zh")
+        if untagged:     # 没写标记、心里话混进正文开头（10-16）；写了 [独白] 后面又接一段没标记的心里话也算（10-20）
+            more, rest = monologue.recover_untagged(said, untagged, lang == "zh")
+            if more:
+                mono, said = "\n\n".join(x for x in (mono, more) if x), rest
         if mono:
             thinking.append(mono)
         if not reply.tool_calls:

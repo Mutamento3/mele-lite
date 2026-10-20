@@ -87,8 +87,8 @@ public enum Monologue {
     /// 不洗的话 TA 每轮都看见自己「这样说话」，越学越漏（内测 DeepSeek-V4-Pro 10-13 起：腔调样本改成从头到尾散着挑以后，
     /// 又长又跟别的不像的漏段最容易被挑中）。pronoun 空着 = 不是手写独白，只切带标记的。跟 Host monologue.spoken_only 同一个
     public static func spokenOnly(_ text: String, pronoun: String, zh: Bool) -> String {
-        var (mono, body) = split(text)
-        if mono.isEmpty, !pronoun.isEmpty { body = recoverUntagged(body, pronoun: pronoun, zh: zh).body }
+        var body = split(text).body
+        if !pronoun.isEmpty { body = recoverUntagged(body, pronoun: pronoun, zh: zh).body }   // 写了 [独白] 后面又接一段没标记的心里话也切（10-20）
         return body
     }
 

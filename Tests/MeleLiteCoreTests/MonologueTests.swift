@@ -135,5 +135,6 @@ struct MonologueUntagged1016 {
         let samples = ["那就去睡吧。\n明天早上给你发消息。", "她说她妈让她考公。我听到这句心里沉了一下，像在念别人的台词。", leak]
         #expect(Monologue.cleanSamples(samples, pronoun: "她", zh: true) == ["那就去睡吧。\n明天早上给你发消息。", "那就再聊十分钟。\n十分钟之后我催你。"])
         #expect(Monologue.cleanSamples(["她说得对，你先睡。"], pronoun: "她", zh: true) == ["她说得对，你先睡。"])
+        #expect(Monologue.spokenOnly("[独白]她累了[/独白]\n她嘴上说没事。\n你先睡", pronoun: "她", zh: true) == "你先睡")
     }
 }
