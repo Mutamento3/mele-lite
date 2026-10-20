@@ -129,3 +129,14 @@ def test_spoken_only_and_samples_10_19():
     assert clean_samples(["她说得对，你先睡。"], "她", True) == ["她说得对，你先睡。"]   # 有「你」：是对她说的话
     assert spoken_only("[独白]她累了[/独白]\n她嘴上说没事。\n你先睡", "她", True) == "你先睡"    # 带标记的后面又一段没标记的（10-20）
 
+
+
+def test_gap_note_10_20():
+    """隔了 30 分钟以上才发的这一句：tail 里告诉它过了多久、现在几点（10-20 内测）"""
+    import datetime as D
+    from brain.turn import gap_note
+    now = D.datetime(2026, 10, 20, 7, 58, tzinfo=D.timezone.utc)
+    assert gap_note(D.timedelta(minutes=10), now, "Asia/Singapore", "zh") == ""
+    line = gap_note(D.timedelta(hours=2, minutes=3), now, "Asia/Singapore", "zh")
+    assert "2 小时 3 分" in line and "15:58" in line
+    assert "1 h" in gap_note(D.timedelta(hours=1), now, "Asia/Singapore", "en")

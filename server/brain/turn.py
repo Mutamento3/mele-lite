@@ -109,6 +109,24 @@ class Deps:
     files_dir: Path | None = None   # 语音存哪（接口启动时填 ApiConfig.files_dir）
 
 
+GAP_MIN = 30          # 隔了多少分钟才提
+
+
+def gap_note(gap, now: datetime, tz: str, lang: str) -> str:
+    """她隔了 30 分钟以上才发这一句：告诉它过了多久、现在几点（10-20 内测：DeepSeek 两小时后还接着上一个话头）。跟 Lite gapLine 同一个"""
+    mins = int(gap.total_seconds() // 60)
+    if mins < GAP_MIN:
+        return ""
+    h, m = divmod(mins, 60)
+    clock = now.astimezone(ZoneInfo(tz)).strftime("%H:%M")
+    if lang == "zh":
+        span = f"{h} 小时 {m} 分" if h and m else (f"{h} 小时" if h else f"{m} 分钟")
+        return f"〔这一句是隔了 {span} 才发来的，现在 {clock}；之前聊的是 {span} 前的事了，这一轮接的是这一句〕"
+    span = f"{h} h {m} min" if h and m else (f"{h} h" if h else f"{m} min")
+    return f"[This message came {span} after the last one; it's now {clock}. What you talked about before was {span} ago — answer this one.]"
+
+
+
 def get_adapter(deps: Deps, route: Route):
     key = (route.provider, route.base_url, route.api_key)
     if key not in deps.adapters:
@@ -416,6 +434,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         sent = await files.claim(pool, conv, attachments, said.id) if attachments else []
         # 双语气泡不翻你那句（10-15 内测：用户不要），原话照发，TA 照样用它那种语言回
         text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
+    # 隔了很久才发的这一句（10-20 内测：两小时没说话，再开口 TA 还接着两小时前的话头）：tail 里告诉它过了多久
+    gap_line = gap_note(now - history[-1].created_at, now, settings.tz, lang) if said is not None and history else ""
     edit_ref = None if scope.incognito or said is None else EditRef(conv, said.id)   # 倒回时按这一轮撤回它写过的东西
     if group is not None and group.user_msg is not None:
         edit_ref = EditRef(conv, group.user_msg)
@@ -589,7 +609,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         user_text=user_text_now,
         # 人设锚（10-01 Aporia：怕脱离人设）：离最新对话最近的一行，每轮十几个字
         tail="\n".join([*thinking_lines, *([inner_voice.hook(settings)] if settings.inner_voice else []),
-                         *([bilingual.rule(settings)] if bilingual.active(settings, group) else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
+                         *([bilingual.rule(settings)] if bilingual.active(settings, group) else []),
+                         *([gap_line] if gap_line else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
                          + ("" if settings.long_mode or settings.talk_rules.strip() else TEXTS[lang]["short"])]),
         images=images,
     )

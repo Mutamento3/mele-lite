@@ -23,6 +23,8 @@ final class LocalBrain: @unchecked Sendable {
     }
     private var rooms: [String: Room] = [:]
     private var graceIDs: [String: UIBackgroundTaskIdentifier] = [:]
+    /// 这一轮跑到一半被手机挂起、回来才写完的窗口（10-20）：回复作废，外面那层负责重来
+    private var staleConvs: Set<String> = []
 
     init(host: LocalHost) { self.host = host }
 
@@ -239,7 +241,15 @@ final class LocalBrain: @unchecked Sendable {
     private func runTurn(_ conv: String, images: [String], nudge: String? = nil, peek: String? = nil) async {
         guard let comp = host.companion(ofConversation: conv) else { return }
         _ = await runTurn(conv, comp: comp, images: images, nudge: nudge, peek: peek, group: nil)
+        // 跑到一半被挂起、回来才写完的那份作废了（见 staleTurnSeconds）：她这期间又发了的，交给 flush 连新的一起回；没发的，按现在重回一遍
+        let r = room(conv)
+        let (stale, waiting) = lock.withLock { (staleConvs.remove(conv) != nil, !r.pending.isEmpty || !r.files.isEmpty) }
+        if stale, !waiting { _ = await runTurn(conv, comp: comp, images: images, nudge: nudge, peek: peek, group: nil) }
     }
+
+    /// 一轮从开口到写完超过这么久 = 中间被手机挂起过（10-20 内测：一点五十五发完切走，后台时间到了请求停在半路，
+    /// 三点五十八回来才写完，「现在是 13:55」那份回复顶着 15:58 出现，像在回她刚说的「五点来接我」）
+    static let staleTurnSeconds: TimeInterval = 600
 
     /// 群里这一轮的背景：群名、别的成员、对你怎么称呼
     struct GroupCtx {
@@ -663,6 +673,9 @@ final class LocalBrain: @unchecked Sendable {
         for line in sentinelLines { req.context += "\n\n" + line }
         if innerOn { req.context += "\n\n" + InnerVoice.hook(zh: zh, pronoun: pronoun) }
         if LocalBilingual.active(settings, group: group != nil) { req.context += "\n\n" + LocalBilingual.rule(settings, zh: zh) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
+        // 隔了很久才说的这一句（10-20 内测截图：一点五十五聊完吃饭，15:58 她说「五点来接我老公」，DeepSeek 回的还是一点五十五那句——
+        // Lite 的附加说明全挂在她那句后面，一长串下来她真正刚说的反而离它开口最远）：告诉它过了多久，再把这一句贴在最后
+        if group == nil, let gap = Self.gapLine(stored, pronoun: pronoun, zh: zh) { req.context += "\n\n" + gap }
         // 独白的提醒压在最最后（10-12：之前排在饮食 / 人物卡 / 人设锚前面，一长就被盖住，一会写一会不写）
         if monologue { req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun) }
         var text = "", thinking = ""
@@ -779,6 +792,12 @@ final class LocalBrain: @unchecked Sendable {
             return false
         }
 
+        if group == nil, Date().timeIntervalSince(started) > Self.staleTurnSeconds {
+            NSLog("[turn] 这一轮跑了 \(Int(Date().timeIntervalSince(started))) 秒，中间被挂起过：回复作废，按现在重来")
+            lock.withLock { _ = staleConvs.insert(conv) }
+            say(["type": "done"])
+            return false
+        }
         text = ModelNoise.strip(text)                   // 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
         // 独白切下来当思考，正文才发出去、才进历史。没选手写独白也切（10-12 内测：人设 / 旧历史里有标签，模型照写，[/独白] 漏进气泡）
         // 10-20 内测（DeepSeek-V4-Pro + 接了别的记忆库）：先写 [独白]、调记忆工具、回来再写一段没标记的心里话 + 正文。
@@ -1012,6 +1031,23 @@ final class LocalBrain: @unchecked Sendable {
                 return text
             }
         }.joined(separator: "\n\n")
+    }
+
+    /// 她隔了 30 分钟以上才发的这一句（上一条是谁说的都算）：过了多久、现在几点、她这一句原话（太长截 200 字）。跟 Host turn.gap_note 同一个意思
+    static func gapLine(_ stored: [[String: Any]], pronoun: String, zh: Bool, now: Date = Date()) -> String? {
+        guard let lastAI = stored.lastIndex(where: { ($0["role"] as? String) == "assistant" }), lastAI + 1 < stored.count else { return nil }
+        let pending = stored[(lastAI + 1)...].filter { ($0["role"] as? String) == "user" }
+        guard let first = pending.first else { return nil }
+        let mins = Int(LocalStore.date(first["at"]).timeIntervalSince(LocalStore.date(stored[lastAI]["at"])) / 60)
+        guard mins >= 30, mins < 60 * 24 * 365 else { return nil }
+        let words = pending.map { ($0["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: zh ? " / " : " / ")
+        guard !words.isEmpty else { return nil }
+        let said = words.count > 200 ? String(words.prefix(200)) + "…" : words
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let span = LocalMap.elapsed(mins, zh: zh)
+        return zh ? "〔\(pronoun)这一句隔了 \(span)才发来，现在 \(f.string(from: now))；之前聊的是 \(span)前的事了〕「\(said)」——这一轮回的是这一句。"
+                  : "[This came \(span) after the last message; it's now \(f.string(from: now)). What you talked about before was \(span) ago.] \"\(said)\" — this is what you're answering."
     }
 
     /// 哨兵（10-08 Aporia：Lite 也要；照 server/brain/inject.py reminder_lines，措辞一样）。
