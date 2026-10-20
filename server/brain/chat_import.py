@@ -54,7 +54,7 @@ def clean(body: dict) -> tuple[str, list[dict], list[str], str]:
     extra = [str(x).strip() for x in body.get("extra") or [] if str(x).strip()]
     if src == "notes":
         text = str(body.get("notes") or "").strip()
-        if not text:
+        if not text and not extra:      # 只有记忆、没有正文也行（10-20：Claude 记忆包单独搬）
             raise ImportError_("笔记是空的")
         if len(text) > NOTES_MAX:
             raise ImportError_("笔记太长了，分几次搬")
@@ -229,14 +229,14 @@ async def start(deps, acc: UUID, cid: UUID, body: dict) -> dict:
     s = Settings.from_dict(await archive.get_settings(pool, cid))
     src, convs, extra, notes = clean(body)
     user = (await accounts.get_profile(pool, acc))["name"] or s.user_name
-    if notes:                                        # 笔记 / 总结：不建窗口，只挑记忆
+    if src == "notes":                               # 笔记 / 总结：不建窗口，只挑记忆（只有记忆、正文空着也走这里，10-20）
         vid, n, picking = None, 0, True
     else:
         vid, n = await store(pool, acc, cid, src, convs, tz=s.tz)
         picking = body.get("memories") is not False
     if picking:
         state = await archive.get_state(pool, cid)
-        parts = notes_chunks(notes) if notes else chunks(convs, user, s.tz)
+        parts = notes_chunks(notes) if src == "notes" else chunks(convs, user, s.tz)
         state["import_job"] = {"state": "picking", "source": src, "chunks": parts, "total": len(parts),
                                "done": 0, "picked": 0, "extra": extra, "conversation": str(vid) if vid else "",
                                "started_at": deps.now().isoformat()}

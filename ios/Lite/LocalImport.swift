@@ -52,6 +52,14 @@ enum LocalImport {
             let mem = (try? ClaudeMemories.parse(f)) ?? []
             if !mem.isEmpty { extra += mem } else { chats.append(f); extra += ChatImport.kelivoMemories(f) }   // Kelivo 的记忆在同一个库里
         }
+        // 只选了记忆文件、没带聊天记录（10-20 内测：Claude 的记忆包解开后单选那个 json）：不建窗口，只收记忆
+        if chats.isEmpty, !extra.isEmpty {
+            let draft: [String: Any] = ["source": ChatSource.notes.rawValue, "extra": extra, "notes": "",
+                                        "conversations": [[String: Any]]()]
+            let preview: [String: Any] = ["source": ChatSource.notes.rawValue, "memory_notes": extra.count, "chars": 0,
+                                          "cost": NSNull(), "conversations": [[String: Any]]()]
+            return .success(Read(draft: draft, preview: preview, chars: 0))
+        }
         let got: (source: ChatSource, conversations: [ImportedConversation])
         do { got = try ChatImport.parse(chats) } catch ChatImportError.mixed {
             return .failure(Failure(message: String(localized: "一次只能搬一家：不同 App 的包分开搬")))
@@ -105,7 +113,7 @@ enum LocalImport {
         }
         if src == .notes {                             // 笔记 / 总结（10-13）：不建窗口，只挑记忆
             let text = draft["notes"] as? String ?? ""
-            guard !text.isEmpty else { return .error(400, String(localized: "先选文件")) }
+            guard !text.isEmpty || !(draft["extra"] as? [String] ?? []).isEmpty else { return .error(400, String(localized: "先选文件")) }
             s.write(jobFile(cid), ["state": "picking", "source": src.rawValue, "chunks": ImportMemory.notesChunks(text), "done": 0,
                                    "picked": [[String: String]](), "extra": draft["extra"] ?? [String](),
                                    "conversation": "", "started_at": LocalStore.iso(Date())])

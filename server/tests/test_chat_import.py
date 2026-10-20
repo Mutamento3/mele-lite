@@ -134,3 +134,20 @@ async def test_notes_file_picks_memories_without_a_window(pool):
     assert [m.content for m in await M.list_memories(pool, UUID(comp["id"]))] == ["小满养了一只橘猫叫年糕"]   # 东京是编的
     asked = e.model.requests[0].messages[-1].text
     assert "笔记" in asked and "聊天记录" not in asked and "关于小满" in asked
+
+
+async def test_memories_only_without_chats(pool):
+    """10-20 内测：Claude 的记忆包解开后只选了那个 json——没有聊天、笔记正文空着，只收官方记忆，不建窗口"""
+    e, t = await _setup(pool, ["- 小满喜欢秋天"])
+    async with e.client(t) as c:
+        comp, _ = await e.first_window(c)
+        before = await pool.fetchval("SELECT count(*) FROM conversations")
+        r = await c.post(f"/companions/{comp['id']}/import",
+                         json={"source": "notes", "notes": "", "extra": ["小满在读高三，喜欢秋天。"], "memories": True})
+        assert r.status_code == 201 and r.json()["picking"] is True
+        await _wait(comp["id"])
+        got = (await c.get(f"/companions/{comp['id']}/import")).json()
+    assert got["state"] == "done"
+    assert await pool.fetchval("SELECT count(*) FROM conversations") == before
+    assert any("高三" in m.content for m in await M.list_memories(pool, UUID(comp["id"])))
+

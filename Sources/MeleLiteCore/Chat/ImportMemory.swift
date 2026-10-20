@@ -184,16 +184,20 @@ public enum ImportMemory {
     }
 }
 
-/// Claude 的「记忆」导出（memories-000.zip 里 memories/<uuid>.json）：conversations_memory + 各项目的 project_memories
+/// Claude 的「记忆」导出（memories-000.zip 里 memories/<uuid>.json）：conversations_memory + 各项目的 project_memories。
+/// 10-20 内测：有人把 zip 解开、只选了里面那个 <uuid>.json——原来只认 zip，单独的 json 认不出。现在 zip、解开的 json 都认，
+/// json 是一个对象或一串对象（整份数据导出里的 memories.json）都行
 public enum ClaudeMemories {
     public static func parse(_ data: Data) throws -> [String] {
-        guard let json = (try? MiniZip.entry(in: data) { $0.hasSuffix(".json") && !$0.hasPrefix("conversations") }) ?? nil,
-              let o = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              o["conversations_memory"] != nil || o["project_memories"] != nil else { return [] }
+        let json = ((try? MiniZip.entry(in: data) { $0.hasSuffix(".json") && !$0.hasPrefix("conversations") }) ?? nil) ?? data
+        guard let any = try? JSONSerialization.jsonObject(with: json) else { return [] }
+        let objects = (any as? [[String: Any]]) ?? (any as? [String: Any]).map { [$0] } ?? []
         var out: [String] = []
-        if let s = o["conversations_memory"] as? String { out.append(s) }
-        for (_, v) in (o["project_memories"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key }) {
-            if let s = v as? String { out.append(s) }
+        for o in objects where o["conversations_memory"] != nil || o["project_memories"] != nil {
+            if let s = o["conversations_memory"] as? String { out.append(s) }
+            for (_, v) in (o["project_memories"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                if let s = v as? String { out.append(s) }
+            }
         }
         return out.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }

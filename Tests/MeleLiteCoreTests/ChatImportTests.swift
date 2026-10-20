@@ -138,6 +138,12 @@ import Testing
     @Test func claudeMemoriesAreRead() throws {
         #expect(try ClaudeMemories.parse(fixture("claude-memories.zip")) == ["小满在读高三，喜欢秋天。", "小满养了一只橘猫叫年糕。"])
         #expect(try ClaudeMemories.parse(fixture("claude-export.zip")).isEmpty)          // 不是记忆包
+        // 10-20 内测：zip 解开、只选了里面那个 json；整份导出里那种一串对象的也认
+        let bare = Data(#"{"conversations_memory":"小满在读高三。","project_memories":{"p1":"小满养了猫。"}}"#.utf8)
+        #expect(try ClaudeMemories.parse(bare) == ["小满在读高三。", "小满养了猫。"])
+        #expect(try ClaudeMemories.parse(Data(#"[{"conversations_memory":"小满喜欢秋天。"}]"#.utf8)) == ["小满喜欢秋天。"])
+        #expect(try ClaudeMemories.parse(Data(#"{"title":"别的东西"}"#.utf8)).isEmpty)
+        #expect(try ClaudeMemories.parse(Data(#"[{"uuid":"x","name":"对话"}]"#.utf8)).isEmpty)
     }
 
     @Test func chunksKeepSpeakersAndDatesAndStayUnderSize() {
