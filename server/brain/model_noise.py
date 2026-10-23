@@ -5,10 +5,18 @@ import re
 
 _BLOCK = re.compile(r"<(ds_[A-Za-z_]+)>[\s\S]*?</\1>")
 _OPEN = re.compile(r"<ds_[A-Za-z_]+>[^\n]*\n?")
+# 10-23 内测：〔醒来〕里「不说就只写 <silent>」整段存进历史，普通聊天它也学着写，原样进了气泡。醒来那条路先由 split_silent 判过
+_SILENT = re.compile(r"<\s*/?\s*silent\s*/?\s*>", re.I)
+
+
+def unsilence(text: str) -> str:
+    """历史里它以前漏出来的 <silent> 抠掉；整句只剩它就原样留着（删空了这一轮就没了，前后两句用户话会挤在一起）"""
+    t = _SILENT.sub("", text).strip() if "silent" in text.lower() else text
+    return t or text
 
 
 def strip(text: str) -> str:
-    t = text_tool_calls(_OPEN.sub("", _BLOCK.sub("", text)))[1]
+    t = text_tool_calls(_SILENT.sub("", _OPEN.sub("", _BLOCK.sub("", text))))[1]
     return text if t == text else t.strip()
 
 

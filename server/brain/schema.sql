@@ -610,6 +610,9 @@ CREATE TABLE IF NOT EXISTS moment_comments (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS moment_comments_moment_idx ON moment_comments (moment_id, id);
+-- 长按「翻译」（10-23 内测，像微信）：{译成什么: 译文}，翻一次存一份
+ALTER TABLE moments ADD COLUMN IF NOT EXISTS translations JSONB;
+ALTER TABLE moment_comments ADD COLUMN IF NOT EXISTS translations JSONB;
 CREATE TABLE IF NOT EXISTS moment_visits (            -- 到点让某个联系人来刷一条 / 回一条评论
   id            BIGSERIAL   PRIMARY KEY,
   account_id    UUID        NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

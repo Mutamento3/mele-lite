@@ -271,7 +271,8 @@ struct MomentsView: View {
                 if !m.content.isEmpty {
                     Text(m.content).font(Typo.sans(15.5)).foregroundStyle(theme.ink)
                         .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                        .contextMenu { textMenu(m, nil) }        // 长按：复制 / 翻译（10-23，像微信；原来的选字跟长按菜单打架，换掉）
+                    translated(m, nil)
                 }
                 if m.images > 0 { photoGrid(m.imagePaths) }
                 HStack(spacing: 12) {
@@ -360,11 +361,52 @@ struct MomentsView: View {
                         replying = (m, c)
                         inputFocused = true
                     }
+                    .contextMenu { textMenu(m, c) }
+                translated(m, c)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.white.opacity(0.42), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    // ── 长按菜单 + 译文（10-23 内测要的，像微信：长按 → 翻译，译文挂在原文下面，再长按能收起）
+    @ViewBuilder
+    private func textMenu(_ m: MomentDTO, _ c: MomentCommentDTO?) -> some View {
+        Button { UIPasteboard.general.string = c?.content ?? m.content } label: { Label("复制", systemImage: "doc.on.doc") }
+        if store.translations[MomentsStore.key(m, c)] == nil {
+            Button { Task { await store.translate(m, comment: c) } } label: { Label("翻译", systemImage: "character.bubble") }
+        } else {
+            Button { withAnimation(.easeOut(duration: 0.18)) { store.hideTranslation(m, comment: c) } } label: {
+                Label("收起译文", systemImage: "chevron.up")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func translated(_ m: MomentDTO, _ c: MomentCommentDTO?) -> some View {
+        let k = MomentsStore.key(m, c)
+        if let t = store.translations[k] {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(t).font(Typo.sans(c == nil ? 15 : 13.5)).foregroundStyle(theme.ink.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                Label("翻译", systemImage: "character.bubble").font(Typo.sans(11)).foregroundStyle(theme.inkDim)
+            }
+            .padding(.leading, 8)
+            .overlay(alignment: .leading) { Capsule().fill(theme.accentDeep.opacity(0.35)).frame(width: 2) }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contextMenu {
+                Button { UIPasteboard.general.string = t } label: { Label("复制译文", systemImage: "doc.on.doc") }
+                Button { store.hideTranslation(m, comment: c) } label: { Label("收起译文", systemImage: "chevron.up") }
+            }
+            .transition(.opacity)
+        } else if store.translating.contains(k) {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("翻译中…")
+            }
+            .font(Typo.sans(11.5)).foregroundStyle(theme.inkDim)
+        }
     }
 
     private func commentLine(_ c: MomentCommentDTO) -> some View {

@@ -152,3 +152,15 @@ def test_history_carries_inner_voice():
             StoredMsg(3, "assistant", "嗯。", "", t)]
     hist, _ = history_msgs(msgs, "zh")
     assert [m.text for m in hist] == ["下地走走？", "好。\n\n[心声]\n有点高兴\n[/心声]", "嗯。"]
+
+
+def test_history_drops_leaked_silent():
+    # 10-23 内测：以前漏进气泡的 <silent> 存在它的话里，每轮原样喂回去会越学越多；只剩 <silent> 的那句不动（删空了历史会断档）
+    from datetime import datetime, timezone
+    from brain.archive import StoredMsg
+    from brain.turn import history_msgs
+    t = datetime(2026, 10, 23, tzinfo=timezone.utc)
+    msgs = [StoredMsg(1, "user", "我去洗澡", "", t), StoredMsg(2, "assistant", "去吧<silent>", "", t),
+            StoredMsg(3, "user", "回来了", "", t), StoredMsg(4, "assistant", "<silent>", "", t)]
+    hist, _ = history_msgs(msgs, "zh")
+    assert [m.text for m in hist] == ["我去洗澡", "去吧", "回来了", "<silent>"]

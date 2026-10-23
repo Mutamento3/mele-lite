@@ -229,6 +229,40 @@ async def names(pool, account: UUID) -> dict[str, str]:
     return out
 
 
+async def translate(deps, account: UUID, moment_id: int, *, comment_id: int | None = None, to: str) -> str | None:
+    """长按「翻译」（10-23 内测，像微信）：一条动态或一条评论翻成 to，翻一次存一份。
+    钥匙用写这句的那个联系人的（钥匙串「翻译」那把优先）；TA 自己写的用第一个联系人的。翻不成 = None"""
+    pool = deps.pool
+    m = await get(pool, account, moment_id)
+    if m is None:
+        raise LookupError
+    if comment_id is None:
+        table, row, text, author = "moments", m.id, m.content, m.author
+    else:
+        c = next((c for c in m.comments if c["id"] == comment_id), None)
+        if c is None:
+            raise LookupError
+        table, row, text, author = "moment_comments", c["id"], c["content"], c["author"]
+    if not text.strip():
+        raise ValueError("没有字可以翻")
+    got = await pool.fetchval(f"SELECT translations->>$2 FROM {table} WHERE id = $1", row, to)
+    if got:
+        return got
+    comps = await _companions(pool, account)
+    comp = next((c for c in comps if str(c) == author), comps[0] if comps else None)
+    if comp is None:
+        return None
+    from . import bilingual
+    from .scope import Scope
+    zh = any("\u4e00" <= ch <= "\u9fff" for ch in to)
+    out = (await bilingual.translate(deps, Scope(account, comp, None), [text], "原文的语言" if zh else "the original language",
+                                     to, "zh" if zh else "en"))[0]
+    if out:
+        await pool.execute(f"""UPDATE {table} SET translations = coalesce(translations, '{{}}'::jsonb) || jsonb_build_object($2::text, $3::text)
+                               WHERE id = $1""", row, to, out)
+    return out
+
+
 def to_dict(m: Moment, nm: dict[str, str]) -> dict:
     by_id = {c["id"]: c for c in m.comments}
     return {"id": m.id, "author": m.author, "name": nm.get(m.author, ""), "content": m.content,

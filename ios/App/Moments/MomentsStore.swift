@@ -139,6 +139,28 @@ final class MomentsStore: ObservableObject {
         return ok
     }
 
+    // ── 长按「翻译」（10-23 内测，像微信）：译文挂在原文下面，键 = "m动态号" / "c评论号"；服务器 / 小管家翻一次存一份
+    @Published var translations: [String: String] = [:]
+    @Published var translating: Set<String> = []
+
+    static func key(_ m: MomentDTO, _ c: MomentCommentDTO?) -> String { c.map { "c\($0.id)" } ?? "m\(m.id)" }
+
+    func translate(_ m: MomentDTO, comment c: MomentCommentDTO? = nil) async {
+        let k = Self.key(m, c)
+        guard translations[k] == nil, !translating.contains(k) else { return }
+        translating.insert(k)
+        defer { translating.remove(k) }
+        var body: [String: Any] = ["to": Locale.current.language.languageCode?.identifier == "en" ? "English" : "中文"]
+        if let c { body["comment_id"] = c.id }
+        struct Out: Decodable { let text: String }
+        await run {
+            let out: Out = try await api.call("POST", "moments/\(m.id)/translate", json: body)
+            translations[k] = out.text
+        }
+    }
+
+    func hideTranslation(_ m: MomentDTO, comment c: MomentCommentDTO? = nil) { translations[Self.key(m, c)] = nil }
+
     func toggleLike(_ m: MomentDTO) async {
         let on = !m.likes.contains { $0.who == "user" }
         await run { replace(try await api.call("POST", "moments/\(m.id)/like", json: ["liked": on])) }

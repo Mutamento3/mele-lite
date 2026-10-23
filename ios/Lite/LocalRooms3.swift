@@ -260,6 +260,53 @@ enum LocalRooms3 {
         return .json(momentOut(m, names(host)), status: 201)
     }
 
+    /// 长按「翻译」（10-23 内测，像微信；照 Host moments.translate）：{comment_id?, to?} → {text}，翻一次存一份。
+    /// 钥匙用写这句的那个联系人的（钥匙串「翻译」那把优先）；你自己写的用第一个联系人的
+    static func translate(_ r: LocalRequest, host: LocalHost) async -> LocalResponse? {
+        let p = r.parts
+        guard r.method == "POST", p.count == 3, p[0] == "moments", p[2] == "translate" else { return nil }
+        let s = host.store
+        guard let mid = Int(p[1]), let m = s.collection("moments").first(where: { ($0["id"] as? Int) == mid }) else {
+            return .error(404, String(localized: "没有这条"))
+        }
+        let cid = r.json["comment_id"] as? Int
+        let to = String((r.json["to"] as? String ?? "").trimmingCharacters(in: .whitespaces).prefix(20))
+        let dst = to.isEmpty ? "中文" : to
+        let row: [String: Any]
+        if let cid {
+            guard let c = (m["comments"] as? [[String: Any]] ?? []).first(where: { ($0["id"] as? Int) == cid }) else {
+                return .error(404, String(localized: "没有这条"))
+            }
+            row = c
+        } else { row = m }
+        let text = row["content"] as? String ?? ""
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .error(400, String(localized: "没有字可以翻")) }
+        if let got = (row["translations"] as? [String: String])?[dst], !got.isEmpty { return .json(["text": got]) }
+        let author = row["author"] as? String ?? ""
+        guard let comp = s.companion(author) ?? s.companions.first else { return .error(502, String(localized: "翻译没成功，等一下再试")) }
+        let zh = dst.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+        guard let out = await LocalBilingual.translate(host, comp: comp, [text], from: zh ? "原文的语言" : "the original language",
+                                                       to: dst, zh: zh).first ?? nil else {
+            return .error(502, String(localized: "翻译没成功，等一下再试"))
+        }
+        _ = update(s, mid) { m in
+            if let cid {
+                var cs = m["comments"] as? [[String: Any]] ?? []
+                if let i = cs.firstIndex(where: { ($0["id"] as? Int) == cid }) {
+                    var tr = cs[i]["translations"] as? [String: String] ?? [:]
+                    tr[dst] = out
+                    cs[i]["translations"] = tr
+                }
+                m["comments"] = cs
+            } else {
+                var tr = m["translations"] as? [String: String] ?? [:]
+                tr[dst] = out
+                m["translations"] = tr
+            }
+        }
+        return .json(["text": out])
+    }
+
     static func deleteComment(_ host: LocalHost, _ cid: Int?) -> LocalResponse {
         var all = host.store.collection("moments")
         for i in all.indices {

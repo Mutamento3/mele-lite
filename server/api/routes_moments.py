@@ -93,6 +93,22 @@ async def comment(mid: int, body: dict = Body(...), acc: UUID = Depends(account)
     return MO.to_dict(await MO.get(a.deps.pool, acc, mid), await MO.names(a.deps.pool, acc))
 
 
+@router.post("/moments/{mid}/translate")
+async def translate(mid: int, body: dict = Body(default={}), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """长按「翻译」（10-23）：{comment_id?, to?}，to = 译成什么（App 传自己的语言，不填 = 中文）→ {text}"""
+    rt = body.get("comment_id")
+    to = str(body.get("to") or "").strip()[:20] or "中文"
+    try:
+        text = await MO.translate(a.deps, acc, mid, comment_id=int(rt) if rt else None, to=to)
+    except LookupError:
+        raise HTTPException(404, "没有这条")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if not text:
+        raise HTTPException(502, "翻译没成功，等一下再试")
+    return {"text": text}
+
+
 @router.delete("/moments/comments/{cid}", status_code=204)
 async def delete_comment(cid: int, acc: UUID = Depends(account), a: Api = Depends(api)):
     if not await MO.delete_comment(a.deps.pool, acc, cid):

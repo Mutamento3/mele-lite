@@ -9,6 +9,10 @@ import Testing
     @Test func stripsUnclosedTagLine() {
         #expect(ModelNoise.strip("<ds_safety>[分类]其他\n好啊") == "好啊")
     }
+    @Test func stripsLeakedSilent() {
+        #expect(ModelNoise.strip("好呀，等你回来<silent>") == "好呀，等你回来")
+        #expect(ModelNoise.strip("<silent>") == "")
+    }
     @Test func leavesNormalTextAlone() {
         #expect(ModelNoise.strip("  就一句话 <b>不是</b>") == "  就一句话 <b>不是</b>")
     }

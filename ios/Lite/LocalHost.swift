@@ -87,6 +87,7 @@ final class LocalHost: @unchecked Sendable {
             if let res = LocalMusic.handle(r, host: self) { return res }
             if let res = await LocalTarot.handle(r, host: self) { return res }
             if let res = await LocalFocus.handle(r, host: self) { return res }
+            if let res = await LocalRooms3.translate(r, host: self) { return res }
             return LocalRooms.handle(r, host: self) ?? .needsHost
         }
     }

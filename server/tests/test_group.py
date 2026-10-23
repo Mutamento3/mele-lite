@@ -54,5 +54,9 @@ def test_model_noise():
     assert model_noise.strip(raw) == "那口汤记我名下。\n\n小满，吃完把碗放那儿。"
     assert model_noise.strip("<ds_safety>[分类]其他\n好啊") == "好啊"
     assert model_noise.strip("  就一句话 <b>不是</b>") == "  就一句话 <b>不是</b>"
+    # 10-23 内测：〔醒来〕那段写着「不说就只写 <silent>」，存进历史以后普通聊天也跟着写，原样进了气泡
+    assert model_noise.strip("好呀，等你回来<silent>") == "好呀，等你回来"
+    assert model_noise.strip("<silent>") == ""
+    assert model_noise.strip("嗯。\n\n< silent />\n</silent>") == "嗯。"
     calls, rest = model_noise.text_tool_calls('等我翻翻。\n<tool_call>{"name": "memory_recall", "arguments": {"text": "汤"}}</tool_call>')
     assert calls == [("memory_recall", {"text": "汤"})] and rest == "等我翻翻。"

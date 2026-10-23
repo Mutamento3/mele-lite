@@ -213,3 +213,31 @@ async def test_recap_told_once_in_chat(pool):
         return "\n".join([b.text for b in req.system] + [m.text for m in req.messages])
     assert "〔朋友圈〕" in seen(model.requests[0]) and "今天的晚霞" in seen(model.requests[0])
     assert "〔朋友圈〕" not in seen(model.requests[1])                                # 说过一次就不再递
+
+
+async def test_translate_long_press(pool):
+    # 10-23 内测：长按动态 / 评论「翻译」，像微信；翻一次存一份，再点不花钱
+    e = Env(pool, ['["The sunset looks like peach juice."]', '["Save me a sip."]'])
+    e.deps.now = lambda: NOW
+    t = await e.login()
+    async with e.client(t) as c:
+        comp, _ = await e.first_window(c)
+        acc = UUID((await c.get("/me")).json()["id"])
+        m = await MO.post(pool, acc, comp["id"], content="晚霞像桃子汁", now=NOW)
+        r = await c.post(f"/moments/{m.id}/translate", json={"to": "English"})
+        assert r.json() == {"text": "The sunset looks like peach juice."}
+        assert "晚霞像桃子汁" in e.model.requests[0].messages[0].text and "English" in e.model.requests[0].messages[0].text
+        assert (await c.post(f"/moments/{m.id}/translate", json={"to": "English"})).json()["text"].startswith("The sunset")
+        assert len(e.model.requests) == 1
+        r = await c.post(f"/moments/{m.id}/comments", json={"content": "给我留一口"})
+        cid = r.json()["comments"][0]["id"]
+        r = await c.post(f"/moments/{m.id}/translate", json={"comment_id": cid, "to": "English"})
+        assert r.json() == {"text": "Save me a sip."}
+        assert (await c.post(f"/moments/{m.id}/translate", json={"comment_id": 999999})).status_code == 404
+        assert (await c.post("/moments/999999/translate", json={})).status_code == 404
+        img = await MO.post(pool, acc, "user", content="", images=[{"path": "x", "mime": "image/jpeg"}], now=NOW)
+        assert (await c.post(f"/moments/{img.id}/translate", json={})).status_code == 400
+        assert (await c.post(f"/moments/{m.id}/translate", json={"to": "日本語"})).status_code == 502   # 模型没话了 = 翻不成
+    other = await e.login("ava@example.com")
+    async with e.client(other) as c:
+        assert (await c.post(f"/moments/{m.id}/translate", json={})).status_code == 404

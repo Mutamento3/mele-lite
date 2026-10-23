@@ -5,10 +5,13 @@ import Foundation
 public enum ModelNoise {
     static let block = try! NSRegularExpression(pattern: #"<(ds_[A-Za-z_]+)>[\s\S]*?</\1>"#)
     static let open = try! NSRegularExpression(pattern: #"<ds_[A-Za-z_]+>[^\n]*\n?"#)
+    /// 10-23 内测（Host）：〔醒来〕里「不说就只写 <silent>」存进历史，普通聊天也学着写、进了气泡。从 Host 搬来的聊天带着它
+    static let silent = try! NSRegularExpression(pattern: #"<\s*/?\s*silent\s*/?\s*>"#, options: .caseInsensitive)
 
     public static func strip(_ text: String) -> String {
         var t = block.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
         t = open.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: "")
+        t = silent.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: "")
         t = textToolCalls(t).rest
         return t == text ? text : t.trimmingCharacters(in: .whitespacesAndNewlines)
     }

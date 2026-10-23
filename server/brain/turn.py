@@ -247,7 +247,7 @@ def history_msgs(stored: list[archive.StoredMsg], lang: str) -> tuple[list[Msg],
             out.append(Msg("user", with_tools_note(pending, bilingual.user_side(m.text, m.translations))))
             pending = ""
         else:
-            text = m.text
+            text = model_noise.unsilence(m.text)
             if m.inner_voice:                 # 心声（10-11）：它记得当时心里想什么，但分得清那不是说出口的
                 text = f"{text}\n\n{inner_voice.context_line(m.inner_voice, lang)}"
             out.append(Msg("assistant", text))
