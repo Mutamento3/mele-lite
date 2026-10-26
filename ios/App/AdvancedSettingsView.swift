@@ -86,6 +86,12 @@ struct AdvancedSettingsView: View {
                     Text("手写独白").tag("monologue")
                 } label: { row("怎么想", Lite.on ? "手写独白 = TA 先把心里话写下来，你在思考里看得到；模型自己的思考多半是第三人称的摘要"
                                                  : "手写独白 = TA 先把心里话写下来；模型自己的思考多半是第三人称的摘要") }
+                // 没打标记重写一次（10-26 Aporia：用人话说、默认关，碰上一次多花一次钱）
+                if (store.settings["thinking_mode"] as? String ?? "") != "native" {
+                    Toggle(isOn: store.s("monologue_retry", false)) {
+                        row("忘了框心里话就重写", "TA 有时忘了把心里话框起来，App 只好猜哪段是心里话，偶尔会猜错：心里话跑进气泡，或者回复被收进思考。开了就让 TA 重写一遍，碰上的那次多花一次钱、多等几秒。DeepSeek 最常忘")
+                    }
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     row("思考风格", Lite.on ? "手写独白时照这个写；空着就随 TA" : "空着用出厂的；写了就换成你的")
                     TextEditor(text: store.s("thinking_style_text", ""))

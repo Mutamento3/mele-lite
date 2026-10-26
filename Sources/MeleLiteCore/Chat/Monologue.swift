@@ -13,6 +13,13 @@ public enum Monologue {
         options: [.caseInsensitive])
     static let saysYou = try! NSRegularExpression(pattern: #"你|\byou\b"#, options: [.caseInsensitive])
     static let quoted = try! NSRegularExpression(pattern: #"「[^」]*」|“[^”]*”|"[^"]*""#)
+    /// 列表行（1. / 2、/ - / •）：独白的规矩不许列要点，列出来的就是说给 TA 听的正文（10-26 内测）
+    static let listLine = try! NSRegularExpression(pattern: #"^(?:\d{1,2}\s*[.．、)）]|[-•·]\s)"#)
+
+    /// 写没写 [独白] 标记（开头或收尾都算）。跟 Host monologue.has_tag 同一个
+    public static func hasTag(_ text: String) -> Bool {
+        tag.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
+    }
 
     /// (独白, 正文)。没写独白就是 ("", 原文)。
     /// 模型偶尔把独白写两遍（10-09 Aporia：DeepSeek 一轮里同一段 [独白]…[/独白] 出现两次，第二段原样漏进了正文）：
@@ -63,17 +70,26 @@ public enum Monologue {
         func has(_ re: NSRegularExpression, _ l: String) -> Bool {
             re.firstMatch(in: l, range: NSRange(location: 0, length: (l as NSString).length)) != nil
         }
-        var cut = 0, lastMention = -1
+        var cut = 0, mentioned: [Int] = []
         for (i, l) in lines.enumerated() {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.isEmpty { continue }
             if has(you, plain(t)) { cut = i; break }
             if t.hasPrefix("*") || t.hasPrefix("＊") { return none }
-            if zh ? plain(t).contains(p) : has(try! NSRegularExpression(pattern: "\\b\(p)\\b", options: [.caseInsensitive]), plain(t)) { lastMention = i }
+            // 10-26 内测截图（Host + GPT 中转）：「那我最喜欢：」后面列了五条，条目里用「她」说她，
+            // 整张单子被当成「提到 TA 的心里话」收进了思考，气泡只剩最后一句。列表那一段（连同前面引出它的话）从段首起算正文
+            if has(listLine, t) {
+                var j = i
+                while j > 0, !lines[j - 1].trimmingCharacters(in: .whitespaces).isEmpty { j -= 1 }
+                cut = j
+                break
+            }
+            if zh ? plain(t).contains(p) : has(try! NSRegularExpression(pattern: "\\b\(p)\\b", options: [.caseInsensitive]), plain(t)) { mentioned.append(i) }
             cut = i + 1
         }
         // 10-19 内测截图：说出口的话里常常一个「你」都没有（「嗯，早点睡。」），原来从第一句带「你」的才算正文，
         // 前面没「你」的话连同心里话一起收进了思考。现在独白只到最后一行提到 TA 的地方，后面的都还给正文
+        let lastMention = mentioned.last(where: { $0 < cut }) ?? -1     // 列表段前面那句提到 TA 的不算（它归正文）
         let mentions = lastMention >= 0
         if mentions, lastMention + 1 < cut { cut = lastMention + 1 }
         guard mentions, cut > 0, cut < lines.count,

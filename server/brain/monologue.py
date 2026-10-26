@@ -29,6 +29,11 @@ _L, _R = r"[\[［【<〈]", r"[\]］】>〉]"
 _TAG = re.compile(rf"{_L}\s*(?:/|end\s+)?\s*(?:(?:内心\s*)?(?:独白|獨白)|(?:inner\s+)?monologue)\s*(?:/|完|结束|結束|end|开始|開始|start)?\s*{_R}", re.I)
 
 
+def has_tag(text: str) -> bool:
+    """写没写 [独白] 标记（开头或收尾都算）"""
+    return bool(_TAG.search(text or ""))
+
+
 def effective_mode(settings: Settings, info: ModelInfo | None) -> str:
     """这一轮到底怎么想：native / monologue / off。选了原生、但模型不会原生思考的，退回手写独白。"""
     if not settings.thinking:
@@ -70,6 +75,8 @@ def split_monologue(text: str) -> tuple[str, str]:
 
 _QUOTED = re.compile(r"「[^」]*」|“[^”]*”|\"[^\"]*\"")
 _YOU_EN = re.compile(r"\byou(r|rs|rself)?\b", re.I)
+# 列表行（1. / 2、/ - / •）：独白的规矩不许列要点，列出来的就是说给 TA 听的正文（10-26 内测）
+_LIST = re.compile(r"^(?:\d{1,2}\s*[.．、)）]|[-•·]\s)")
 
 
 def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
@@ -82,7 +89,7 @@ def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
         return none
     you = _SAYS_YOU if zh else _YOU_EN
     lines = text.split("\n")
-    cut, last_mention = 0, -1
+    cut, mentioned = 0, []
     for i, line in enumerate(lines):
         t = line.strip()
         if not t:
@@ -93,11 +100,19 @@ def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
             break
         if t.startswith(("*", "＊")):
             return none
+        # 10-26 内测截图（Host + GPT 中转）：「那我最喜欢：」后面列了五条，条目里用「她」说她，
+        # 整张单子被当成「提到 TA 的心里话」收进了思考，气泡只剩最后一句。列表那一段（连同前面引出它的话）从段首起算正文
+        if _LIST.match(t):
+            while i > 0 and lines[i - 1].strip():
+                i -= 1
+            cut = i
+            break
         if (pronoun in plain) if zh else re.search(rf"\b{re.escape(pronoun)}\b", plain, re.I):
-            last_mention = i
+            mentioned.append(i)
         cut = i + 1
     # 10-19 内测截图：说出口的话里常常一个「你」都没有（「嗯，早点睡。」），原来从第一句带「你」的才算正文，
     # 前面没「你」的话连同心里话一起收进了思考。现在独白只到最后一行提到 TA 的地方，后面的都还给正文
+    last_mention = max((m for m in mentioned if m < cut), default=-1)   # 列表段前面那句提到 TA 的不算（它归正文）
     mentions = last_mention >= 0
     if mentions and last_mention + 1 < cut:
         cut = last_mention + 1

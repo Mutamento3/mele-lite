@@ -732,7 +732,8 @@ final class LocalBrain: @unchecked Sendable {
         let started = Date()                            // 「思考了 x 秒」：从开口到说完（含中间调工具，10-05）
         let cid = comp["id"] as? String ?? ""
         var gaugeNoted = false
-        var retriedEmpty = false, retriedNoMono = false, usedTools = false
+        var retriedEmpty = false, retriedNoMono = false, retriedNoTag = false, usedTools = false
+        let retag = settings["monologue_retry"] as? Bool ?? false     // 没打标记重写一次（10-26 Aporia：多花一次钱，默认关）
         // 记新记忆前问一句「是不是跟旧的同一件事」（10-12）：用同一把 key，不想事、只回编号
         let small = host.route(chore: "dedupe", else: (provider, key)) ?? (provider, key)   // 小判断用勾的钥匙（10-15）
         let judge: (String) async -> String? = { [small] prompt in
@@ -794,6 +795,17 @@ final class LocalBrain: @unchecked Sendable {
                     rounds = []
                     req.tools = []
                     req.assistantPrefix = zh ? "[独白]\n" : "[monologue]\n"
+                    continue
+                }
+                // 没打 [独白] 标记（10-26 Aporia，设置里开了才做）：不猜哪段是心里话，这段不留、补一句提醒再叫一次（只一次）。
+                // DeepSeek 没调过工具的上面那条已经填好开头重写了；这里管别家，和调过工具没法填开头的 DeepSeek
+                if retag, calls.isEmpty, monologue, group == nil, !retriedNoTag, !retriedNoMono, !Monologue.hasTag(text) {
+                    retriedNoTag = true
+                    NSLog("[monologue] 没打标记，提醒一句再叫一次")
+                    text = ""
+                    rounds = []
+                    req.context += "\n\n" + (zh ? "（你刚才没写 [独白]…[/独白] 就直接回了。重写一遍：最前面先把心里话写在 [独白] 和 [/独白] 之间，收好尾，再写正文。）"
+                                                  : "(You replied without the [monologue]…[/monologue] part. Write it again: start with your thoughts between [monologue] and [/monologue], close it, then the reply.)")
                     continue
                 }
                 guard !calls.isEmpty else { break }

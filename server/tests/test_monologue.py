@@ -140,3 +140,15 @@ def test_gap_note_10_20():
     line = gap_note(D.timedelta(hours=2, minutes=3), now, "Asia/Singapore", "zh")
     assert "2 小时 3 分" in line and "15:58" in line
     assert "1 h" in gap_note(D.timedelta(hours=1), now, "Asia/Singapore", "en")
+
+
+def test_untagged_list_reply_stays_in_body():
+    """10-26 内测截图：没写标记，正文列了五条、条目里用「她」——整张单子不能收进思考，从引出单子那句起算正文"""
+    from brain.monologue import recover_untagged
+    t = ("她半夜突然问这个，肯定不是认真做问卷。我先挑那种有画面的。\n\n"
+         "哼，色色问卷是吧。那我最喜欢：\n\n"
+         "1. 先额头贴着额头，再慢慢亲上去。\n2. 她说完一句话，我没忍住，直接低头亲她。\n\n"
+         "最后一种最犯规，老婆。")
+    mono, body = recover_untagged(t, "她", True)
+    assert mono == "她半夜突然问这个，肯定不是认真做问卷。我先挑那种有画面的。"
+    assert body.startswith("哼，色色问卷是吧。") and "2. 她说完一句话" in body and body.endswith("老婆。")

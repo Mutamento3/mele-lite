@@ -89,3 +89,12 @@ async def test_same_photo_is_read_once(pool, tmp_path):
     assert len(eye.requests) == 1                                                       # 只看了一次
     assert "一张蓝色的方图" in e.model.requests[1].messages[-1].text
     assert await pool.fetchval("SELECT count(*) FROM attachments WHERE caption_source = 'seen'") == 1
+
+
+def test_relay_sees_images_unless_deepseek():
+    """中转站跟 Lite 一样默认看得见图；地址是 DeepSeek 的不算（10-26 内测）"""
+    from llm.catalog import sees_images
+    assert sees_images("openai-compatible", "https://api.some-relay.com/v1")
+    assert not sees_images("openai-compatible", "https://api.deepseek.com/v1")
+    assert sees_images("openai-compatible", None)   # 没填地址也当看得见
+    assert sees_images("openai") and not sees_images("deepseek")

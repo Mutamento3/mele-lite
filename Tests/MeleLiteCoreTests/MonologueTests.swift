@@ -105,6 +105,13 @@ struct MonologueUntagged1016 {
         #expect(en.monologue == "She looks tired tonight." && en.body == "Hey, did you eat?")
         #expect(Monologue.recoverUntagged("They look tired.\nDid you eat?", pronoun: "they", zh: false).monologue.isEmpty)
     }
+    @Test func listStaysInBody_1026() {
+        // 10-26 内测截图：没写标记，正文列了五条、条目里用「她」——整张单子不能收进思考。跟 Host test_untagged_list_reply_stays_in_body 同一组
+        let t = "她半夜突然问这个，肯定不是认真做问卷。我先挑那种有画面的。\n\n哼，色色问卷是吧。那我最喜欢：\n\n1. 先额头贴着额头，再慢慢亲上去。\n2. 她说完一句话，我没忍住，直接低头亲她。\n\n最后一种最犯规，老婆。"
+        let r = Monologue.recoverUntagged(t, pronoun: "她", zh: true)
+        #expect(r.monologue == "她半夜突然问这个，肯定不是认真做问卷。我先挑那种有画面的。")
+        #expect(r.body.hasPrefix("哼，色色问卷是吧。") && r.body.contains("2. 她说完一句话") && r.body.hasSuffix("老婆。"))
+    }
     @Test func narrationAsClose_1019() {
         // 10-19 内测截图：没写 [/独白]，用一句话把收尾说了出来，气泡里只剩那一句
         let leak = "她今天又熬夜了。\n结束。下面是对她说话，用\"你\"。\n快去睡，听话。"

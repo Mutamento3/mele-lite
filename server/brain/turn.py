@@ -153,7 +153,7 @@ class LoopResult:
 
 
 async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lang: str,
-                    max_rounds: int = TOOL_ROUNDS_MAX, untagged: str = "") -> LoopResult:
+                    max_rounds: int = TOOL_ROUNDS_MAX, untagged: str = "", retag: bool = False) -> LoopResult:
     """调模型；它要调工具就执行、把结果还给它、接着调。看的是回复里有没有工具请求，不看它自报的停下原因。
     最多 max_rounds 个来回：最后一个来回的结果里告诉它「次数用完了」，再调一次就收尾。"""
     total = Usage()
@@ -161,11 +161,21 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
     used: list[str] = []
     notes: list[str] = []
     retried = False                          # 只写了独白没写正文的，再叫一次（只一次）
+    retagged = False                         # 没打 [独白] 标记的，重写一次（只一次；设置里开了才做）
+    tagged = False                           # 这一轮里哪一段写过标记（调工具前写过也算）
     shown: set[tuple[str, str]] = set()      # 一轮里同样的卡只挂一张（翻了好几回记忆 → 一张「翻了些记忆」）
     cards: list[dict] = []
     for round_no in range(max_rounds + 1):
         reply = await call(adapter, req)
         total = total + reply.usage
+        tagged = tagged or monologue.has_tag(reply.text)
+        if (retag and untagged and not reply.tool_calls and not tagged and not retagged and round_no < max_rounds):
+            # 10-26 Aporia：没打标记就得猜哪段是心里话，猜错了要么漏进气泡、要么把正文吞进思考。设置里开了就不猜，
+            # 补一句提醒再叫一次（这次的整段不留）；第二次还没打就照常猜
+            retagged = True
+            last = req.messages[-1]
+            req.messages[-1] = replace(last, text=f"{last.text}\n\n{NO_TAG_NOTE[lang]}")
+            continue
         if reply.thinking.strip():
             thinking.append(reply.thinking.strip())
         mono, said = monologue.split_monologue(reply.text)    # 手写独白：切下来当思考链；调工具前那一段也要切
@@ -224,6 +234,9 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
         req.rounds.append(ToolRound(reply.raw_assistant, list(reply.tool_calls), results))
     raise AssertionError("unreachable")
 
+
+NO_TAG_NOTE = {"zh": "（你刚才没写 [独白]…[/独白] 就直接回了。重写一遍：最前面先把心里话写在 [独白] 和 [/独白] 之间，收好尾，再写正文。）",
+               "en": "(You replied without the [monologue]…[/monologue] part. Write it again: start with your thoughts between [monologue] and [/monologue], close it, then the reply.)"}
 
 MONO_ONLY_NOTE = {"zh": "（你刚才只写了独白就停了，没写正文。独白照常写，写完一定接着写正文。）",
                   "en": "(Last time you wrote only the monologue and stopped. Write the monologue as usual, then always go on to the reply.)"}
@@ -468,7 +481,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             if f.kind == "image":
                 await _safe(vision.describe(deps, scope, route, f, lang, day, lambda r: get_adapter(deps, r)), "")
         text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
-        if sees_images(route.provider):
+        if sees_images(route.provider, route.base_url):
             images = tuple(ImagePart(f.mime, base64.b64encode(Path(f.path).read_bytes()).decode())
                            for f in sent if f.kind == "image" and not f.sticker_id)   # 表情包只给描述（10-01）
     last_assistant = next((m.text for m in reversed(history) if m.role == "assistant"), "")
@@ -626,7 +639,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     started = time.monotonic()                   # 「思考了 x 秒」：从开口到说完（含中间调工具）
     out, err = None, None
     try:
-        out = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged)
+        out = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged, retag=settings.monologue_retry)
     except LLMError as e:
         err = e
     if err is not None and context_full(err):
@@ -643,7 +656,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                                         lang, settings.user_name))
             req = build_request(parts, model=route.chat_model, thinking=mode == "native", user_tag=user_tag(acc), lang=lang)
             try:
-                out, err = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged), None
+                out, err = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged, retag=settings.monologue_retry), None
             except LLMError as e:
                 err = e
         if err is not None and rolled:

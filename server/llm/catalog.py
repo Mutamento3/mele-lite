@@ -47,10 +47,13 @@ CATALOG: dict[str, ModelInfo] = {m.id: m for m in [
 DEFAULT_HIGH_WATER = 60_000
 
 
-SEES_IMAGES = ("anthropic", "openai", "gemini")     # 这几家的聊天模型都能直接看图；DeepSeek、兼容口（不知道背后是谁）不算
+SEES_IMAGES = ("anthropic", "openai", "gemini")     # 这几家的聊天模型都能直接看图；DeepSeek 不算
 
 
-def sees_images(provider: str) -> bool:
+def sees_images(provider: str, base_url: str | None = None) -> bool:
+    """中转站（10-26 内测「Lite 里 GPT 能看图、搬到 Host 看不了」）：跟 Lite 一样默认当它看得见，地址是 DeepSeek 的才不算"""
+    if provider == "openai-compatible":
+        return "deepseek" not in (base_url or "").lower()
     return provider in SEES_IMAGES
 
 

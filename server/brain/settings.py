@@ -29,7 +29,8 @@ PATROL_OVERRIDES = {                                # 高级设置里能单独�
 # 「高级」里的项：「同步到全部联系人」只抄这些（09-28 Aporia要的一键同步），不碰名字、性格、关系、钥匙这些外层的
 ADVANCED_KEYS = ("careful_read", "recall_probe", "reply_wait", "max_bubbles", "thinking", "thinking_mode",
                  "thinking_style_text", "ledger_same_as_chat", "sentinels", "injections", "patrol_overrides",
-                 "heartbeat_on", "tool_reminder_every", "thinking_style_every", "inner_voice", "inner_voice_style")
+                 "heartbeat_on", "tool_reminder_every", "thinking_style_every", "inner_voice", "inner_voice_style",
+                 "monologue_retry")
 
 
 def parse_hm(s: str):
@@ -72,6 +73,7 @@ class Settings:
     long_mode: bool = False                # 长文模式
     thinking: bool = True                  # 想不想事（关了就没有思考链）
     thinking_mode: str | None = None       # 怎么想：native 原生思考 / monologue 手写独白；None = 看模型（DeepSeek 独白、Claude 原生）
+    monologue_retry: bool = False          # 手写独白没打 [独白] 标记就重写一次（10-26 Aporia：多花一次钱，默认关）
     ledger_same_as_chat: bool = False      # 账本用聊天那个模型写（默认用同一家便宜的）
     sentinels: dict[str, bool] = field(default_factory=lambda: {k: k not in SENTINELS_OFF for k in SENTINELS})
     tool_reminder_every: int = 5

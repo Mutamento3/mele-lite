@@ -284,6 +284,26 @@ async def test_users_do_not_see_each_other(pool, user_a, user_b):
     assert len(m.requests[1].messages) == 1 and "我是 A" not in m.requests[1].messages[0].text
 
 
+async def test_untagged_rewrites_once_when_switched_on(pool, user_a):
+    """10-26 Aporia：设置里开了「没打标记重写一次」——没写 [独白] 的那段不留，补一句提醒再叫一次；没开就照常猜，不多花钱"""
+    untagged = "她半夜问这个。\n\n哼，那我最喜欢：\n\n1. 额头贴着额头。\n2. 她说完一句话就亲她。"
+    await archive.save_settings(pool, user_a, {"thinking_mode": "monologue", "monologue_retry": True})
+    m = FakeModel([untagged, "[独白]她半夜问这个。[/独白]\n\n哼，那我最喜欢额头贴着额头。"])
+    ev = await turn(make_deps(pool, m), user_a, "列出你最喜欢的接吻方式")
+    assert len(m.requests) == 2 and "没写 [独白]" in m.requests[1].messages[-1].text
+    assert of(ev, "thinking")[0]["text"] == "她半夜问这个。"
+    assert [e["text"] for e in of(ev, "bubble")] == ["哼，那我最喜欢额头贴着额头。"]
+    saved = (await archive.unrolled(pool, user_a))[-1]
+    assert "没写 [独白]" not in saved.text
+
+
+async def test_untagged_no_rewrite_by_default(pool, user_a):
+    await archive.save_settings(pool, user_a, {"thinking_mode": "monologue", "user_pronoun": "she"})
+    m = FakeModel(["她半夜问这个。\n\n哼，那我最喜欢：\n\n1. 额头贴着额头。"])
+    ev = await turn(make_deps(pool, m), user_a, "列出你最喜欢的接吻方式")
+    assert len(m.requests) == 1 and of(ev, "thinking")[0]["text"] == "她半夜问这个。"
+
+
 async def test_monologue_without_reply_gets_one_more_try(pool, user_a):
     """09-27 深夜Aporia跟 Lumi 说再见：它只写了一小段独白就停了，正文空的，一个字没回。
     这种时候再叫它一次（这一轮的最后一句后面补一句提醒），用第二次的独白和正文。"""
