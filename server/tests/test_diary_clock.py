@@ -145,3 +145,32 @@ async def test_free_diary_waits_out_deepseek_peak(pool):
         clock["now"] = utc(2026, 10, 6, 10, 0, 30)
         await tick_once(e.deps, e.rooms)
     assert (await DY.companion_entry(pool, comp["id"], date(2026, 10, 5))).body == "平常的一天。"
+
+
+async def test_other_contact_writes_too_when_diary_also(pool):
+    """10-27：Host 上别的联系人开了「也写日记」，同一晚跟着写；它读不到 TA 的日记、不留页边。"""
+    e = Env(pool, ["〔正文〕主联系人这天。\n〔锁着〕无", "〔正文〕阿满这天。\n〔锁着〕无"])
+    clock = {"now": utc(2026, 10, 1, 12)}
+    e.deps.now = lambda: clock["now"]
+    t = await e.login()
+    async with e.client(t) as c:
+        comp, conv = await e.first_window(c)
+        settings = {"tz": TZ_SG, "sleep_from": "23:00", "sleep_to": "07:30", "heartbeat_on": False, "morning_on": False}
+        await c.patch(f"/companions/{comp['id']}", json={"settings": settings})
+        other = (await c.post("/companions", json={"name": "阿满"})).json()
+        key = (await c.post("/keys", json={"provider": "deepseek", "api_key": "sk-abcdefgh1234",
+                                           "chat_model": "deepseek-flash"})).json()
+        await c.patch(f"/companions/{other['id']}", json={"settings": {**settings, "diary_also": True}, "key_id": key["id"]})
+        oconv = (await c.get(f"/companions/{other['id']}/conversations")).json()[0]
+        await archive.add_message(pool, conv["id"], "user", "晚安", now=clock["now"])
+        await archive.add_message(pool, oconv["id"], "user", "阿满晚安", now=clock["now"])
+        acc = await pool.fetchval("SELECT account_id FROM companions WHERE id = $1", comp["id"])
+        await DY.write_mine(pool, acc, day=date(2026, 10, 1), body="我的秘密日记", private=False, now=clock["now"])
+        await pool.execute("DELETE FROM clocks WHERE kind = 'diary'")
+        await tick_once(e.deps, e.rooms)
+        clock["now"] = utc(2026, 10, 1, 16, 31)
+        await tick_once(e.deps, e.rooms)
+    assert (await DY.companion_entry(pool, comp["id"], date(2026, 10, 1))).body == "主联系人这天。"
+    assert (await DY.companion_entry(pool, other["id"], date(2026, 10, 1))).body == "阿满这天。"
+    assert "我的秘密日记" in e.model.requests[0].messages[-1].text
+    assert "我的秘密日记" not in e.model.requests[1].messages[-1].text and "页边" not in e.model.requests[1].messages[-1].text

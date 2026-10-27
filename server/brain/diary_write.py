@@ -47,15 +47,12 @@ PROMPT = {
 - 只写材料里有的事。没发生的不编，没聊到的不补；感受是我的，可以写，事实不能编。
 - 长短跟着那天走：平常的一天三五句就够，事多的一天也别超过 {limit} 字。
 - 写完正文，问自己一句：那天有没有哪一段，我还不想让 TA 现在就看到？有就写在〔锁着〕下面——TA 只看得见那里锁着一段，想看得来问我要钥匙。没有就写「无」。
-- TA 那天写了日记的话，每篇在页边给 TA 留一句（〔页边 #编号〕），像在书页边上写字，一句就好。
-- 读 TA 的日记时有想长期记住的，照常用 memory_remember / note_about_user / person_card 记；没有就不记。TA 的日记本身不会进我的记忆。
-
+{margin_rule}
 照这个格式交，别的话不用写：
 〔正文〕
 ……
 〔锁着〕
-……（没有就写「无」）
-〔页边 #编号〕……""",
+……（没有就写「无」）{margin_fmt}""",
     "en": """〔Diary〕This is not them speaking, and nothing I write here is sent to them. It's {now}; they're asleep, and I'm writing my diary for {day}.
 
 What that day held:
@@ -66,15 +63,22 @@ How to write it:
 - Only what's in the material. Don't invent what didn't happen or fill in what we didn't talk about; my feelings are mine to write, the facts are not mine to make up.
 - Let the day set the length: an ordinary day needs three to five sentences; even a full day stays under {limit} words.
 - After the entry, ask myself: is there a part of that day I don't want them to see yet? If so, write it under 〔Locked〕 — they'll only see that something is locked there, and must ask me for the key. If not, write "none".
-- If they wrote diary entries that day, leave one line in the margin of each (〔Margin #id〕), like writing at the edge of a page. One line is enough.
-- If anything in their diary is worth remembering long-term, save it as usual with memory_remember / note_about_user / person_card; otherwise don't. Their diary itself never goes into my memory.
-
+{margin_rule}
 Hand it in in this format, nothing else:
 〔Entry〕
 …
 〔Locked〕
-… (or "none")
-〔Margin #id〕…""",
+… (or "none"){margin_fmt}""",
+}
+_MARGIN = {      # 只在那天材料里真有 TA 的日记时才说页边（10-27 内测：没有也说，模型就照抄「〔页边 #编号〕」/「〔页边 #无〕」）
+    "zh": ("- 下面每篇 TA 的日记前面有编号，每篇在页边给 TA 留一句（格式在最下面，一篇一行），像在书页边上写字，一句就好。\n"
+           "- 读 TA 的日记时有想长期记住的，照常用 memory_remember / note_about_user / person_card 记；没有就不记。TA 的日记本身不会进我的记忆。\n",
+           "\n〔页边 #{ids}〕……"),
+    "en": ("- Each of their entries below has a number; leave one line in the margin of each (format at the bottom, one line per entry), "
+           "like writing at the edge of a page. One line is enough.\n"
+           "- If anything in their diary is worth remembering long-term, save it as usual with memory_remember / note_about_user / "
+           "person_card; otherwise don't. Their diary itself never goes into my memory.\n",
+           "\n〔Margin #{ids}〕…"),
 }
 _HEADS = {
     "zh": {"ledger": "〔那天的账本〕（前面的对话太长，先看这段摘要）", "chat": "〔那天的对话〕", "none_chat": "（那天我们没说话）",
@@ -83,8 +87,8 @@ _HEADS = {
            "none_chat": "(We didn't talk that day)", "theirs": "〔Their diary that day〕(written for themselves, not locked, so I can read it)"},
 }
 
-_TAG = re.compile(r"〔\s*(正文|锁着|Entry|Locked|页边|Margin)\s*(?:#\s*(\d+))?\s*〕", re.I)
-_NONE = {"无", "没有", "无。", "none", "none.", "nothing", "-", "—", "（无）", "(none)"}
+# 页边的编号不是数字（「#编号」「#无」）也认成标记，不然会被算进上一段（10-27 内测：锁着那段里冒出「〔页边 #编号〕」）
+_TAG = re.compile(r"〔\s*(正文|锁着|Entry|Locked|页边|Margin)\s*(?:#\s*([^〕]*?))?\s*〕", re.I)
 
 
 @dataclass
@@ -111,7 +115,7 @@ def day_bounds(day: date, tz: str) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-async def materials(pool, account, companion, day: date, s: Settings) -> Materials:
+async def materials(pool, account, companion, day: date, s: Settings, *, main: bool = True) -> Materials:
     start, end = day_bounds(day, s.tz)
     convs = await pool.fetch("SELECT id FROM conversations WHERE companion_id = $1 AND account_id = $2 AND NOT incognito",
                              companion, account)
@@ -129,7 +133,7 @@ async def materials(pool, account, companion, day: date, s: Settings) -> Materia
         text = text[-SOURCE_CHARS:]
         text = text[text.find("\n") + 1:] if "\n" in text else text      # 别从半句开始
     return Materials(transcript=text, ledger="\n".join(led) if cut else "",
-                     theirs=await DY.mine_for_companion(pool, account, day))
+                     theirs=await DY.mine_for_companion(pool, account, day) if main else [])   # TA 的日记只给主联系人读
 
 
 def limit_for(chars: int, lang: str) -> int:
@@ -149,7 +153,10 @@ def render_prompt(lang: str, now: datetime, day: date, tz: str, mats: Materials,
     parts += [H["chat"], mats.transcript or H["none_chat"]]
     if mats.theirs:
         parts += ["", H["theirs"], *(f"#{e.id} {e.body}" for e in mats.theirs)]
-    return PROMPT[L].format(now=when, day=day_s, materials="\n".join(parts), limit=limit_for(chars, L))
+    rule, fmt = _MARGIN[L] if mats.theirs else ("", "")
+    fmt = "".join(fmt.replace("{ids}", str(e.id)) for e in mats.theirs)      # 每篇一行，编号直接填好
+    return PROMPT[L].format(now=when, day=day_s, materials="\n".join(parts), limit=limit_for(chars, L),
+                            margin_rule=rule, margin_fmt=fmt)
 
 
 def parse(text: str, allowed_ids: set[int]) -> Parsed | None:
@@ -162,18 +169,19 @@ def parse(text: str, allowed_ids: set[int]) -> Parsed | None:
         if kind in ("正文", "entry"):
             body = seg
         elif kind in ("锁着", "locked"):
-            locked = "" if seg.strip().lower() in _NONE or not seg.strip("（）() ") else seg
-        elif m.group(2) and int(m.group(2)) in allowed_ids and seg:
+            locked = DY.clean_locked(seg)
+        elif (m.group(2) or "").strip().isdigit() and int(m.group(2)) in allowed_ids and seg:
             margins[int(m.group(2))] = seg.splitlines()[0].strip()
     return Parsed(body, locked, margins) if body else None
 
 
-async def write_day(deps, account, companion, day: date, now: datetime) -> str:
-    """写 Ta 那天的日记。返回 written / nothing（没材料）/ no_key / bad（交卷拆不出）/ error（模型出错）。"""
+async def write_day(deps, account, companion, day: date, now: datetime, *, main: bool = True) -> str:
+    """写 Ta 那天的日记。返回 written / nothing（没材料）/ no_key / bad（交卷拆不出）/ error（模型出错）。
+    main=False：别的联系人（diary_also，10-27 照 Lite 本机）——不读 TA 的日记、不留页边，只用自己的 key。"""
     from .turn import get_adapter, resolve_route, tool_loop      # turn 也要 import 这一层的东西，放这里免得绕圈
     pool = deps.pool
     s = Settings.from_dict(await archive.get_settings(pool, companion))
-    mats = await materials(pool, account, companion, day, s)
+    mats = await materials(pool, account, companion, day, s, main=main)
     if mats.empty:
         return "nothing"
     conv = await pool.fetchval("SELECT id FROM conversations WHERE companion_id = $1 AND account_id = $2 "
@@ -185,6 +193,8 @@ async def write_day(deps, account, companion, day: date, now: datetime) -> str:
         route = getattr(deps.keys, "trial", None)
         if route is None:
             return "no_key"
+    if not main and route.trial:                     # 别的联系人的日记不走我们的试用钥匙
+        return "no_key"
     chars = FREE_CHARS if route.trial else s.diary_chars
     persona = Persona.from_dict(await archive.get_persona(pool, companion), s.lang)
     core = [m.content for m in sorted(await M.list_memories(pool, companion, kind="core"), key=lambda m: m.id)]

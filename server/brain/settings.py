@@ -91,6 +91,7 @@ class Settings:
     relationship: str = ""              # 你们是什么关系（09-28）：friend / partner / family / buddy，或用户自己写的；空 = 没说
     cache_keepalive: bool = False       # 缓存保活（09-29，只对 Claude）：隔很久才聊也不怕缓存过期，TA 睡觉时停
     diary_on: bool = True               # 日记开关（10-01 Aporia：付费用户可以关）；只看主联系人的
+    diary_also: bool = False            # 别的联系人也写日记（10-27，Host 照 Lite 本机 10-12）；只看非主联系人的，默认关
     diary_chars: int = 600              # 日记最多写多少字（10-01 Aporia）：自己 key / 会员的滑块；免费固定 300（brain/diary_write.FREE_CHARS）
     voice_mode: str = "sometimes"       # 语音条（10-03）：off 不发 / sometimes 偶尔 / often 常常
     voice_id: str = ""                  # 它的嗓子（ElevenLabs voice_id）；空 = 用出厂那把（brain/voice.PRESETS 第一把）

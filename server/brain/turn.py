@@ -889,6 +889,7 @@ async def roll(deps: Deps, scope: Scope, route: Route, adapter, settings: Settin
     await edits.forget_up_to(pool, scope.conversation, plan.rolled[-1].id)
     state["voice_samples"] = [] if group is not None else ledger.voice_samples(plan.rolled)
     state["ledger_fails"] = 0
+    state["ledger_at"] = deps.now().isoformat()      # 上次卷进账本的时刻（10-27 内测：Host 设置里「回声」看得到）
     state["recall_seen"] = []            # 新的一潮：原文卷走了，靠联想的记忆可以重新浮上来
     state["lore_seen"] = {}              # 世界书也清零：递过的那几轮卷走了
     await archive.save_state(pool, state_key, state)

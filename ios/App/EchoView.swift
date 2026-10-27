@@ -45,6 +45,10 @@ struct EchoView: View {
             if books.count > 1 {
                 Text(b.title).font(Typo.sans(Typo.Size.callout, .semibold)).foregroundStyle(theme.inkDim)
             }
+            if let when = APIClient.parseDate(b.at) {     // 上次什么时候卷的（10-27 内测：Host 上看不到）
+                Text("上次卷进账本：\(when.formatted(date: .abbreviated, time: .shortened))")
+                    .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+            }
             if b.fails > 0 {
                 Text("最近 \(b.fails) 次没卷成（写出来的对不上原文，先留着原话，下一轮再试）。")
                     .font(Typo.sans(Typo.Size.caption)).foregroundStyle(.orange)

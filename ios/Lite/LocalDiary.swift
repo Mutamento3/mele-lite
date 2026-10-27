@@ -75,7 +75,8 @@ enum LocalDiary {
         }
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"
         let limit = max(300, min(1500, st["diary_chars"] as? Int ?? 600))
-        let prompt = DiaryDesk.prompt(now: f.string(from: now), day: day, materials: materials, limit: limit, lang: zh ? .zh : .en)
+        let prompt = DiaryDesk.prompt(now: f.string(from: now), day: day, materials: materials, limit: limit, lang: zh ? .zh : .en,
+                                       margins: theirs.map { $0["id"] as? Int ?? 0 })
         let system = (zh ? "你是 \(contact.name)。\n" : "You are \(contact.name).\n") + contact.persona
         let req = ChatRequest(system: system, turns: [ChatTurn(role: .user, text: prompt)], maxTokens: 3000)
         var text = ""

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import random
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
@@ -50,8 +51,22 @@ _COLS = ("id, account_id, companion_id, author, day, body, locked, private, marg
          "code_locked_until, keyed_at, unlocked_at, told_unlocked, memory_id, created_at, updated_at")
 
 
+_STRAY = re.compile(r"^\s*〔\s*(?:页边|Margin)[^〕]*〕.*$", re.I | re.M)
+LOCKED_NONE = {"无", "没有", "无。", "none", "none.", "nothing", "-", "—", "（无）", "(none)"}
+
+
+def clean_locked(text: str) -> str:
+    """锁着那段里混进来的格式残渣（10-27 内测）：模型照抄了提示词里的「〔页边 #编号〕」、或者那天没 TA 的日记也写了一行页边，
+    旧的拆法认不出就整段算进锁着里。去掉这些行；剩下的是「无」/ 空 = 没锁。"""
+    left = _STRAY.sub("", text or "").strip()
+    return "" if left.lower() in LOCKED_NONE or not left.strip("（）() ") else left
+
+
 def _row(r) -> Entry:
-    return Entry(**dict(r))
+    e = Entry(**dict(r))
+    if e.author == "companion" and e.locked:
+        e.locked = clean_locked(e.locked)      # 已经存进去的旧残渣，读出来时一起洗掉
+    return e
 
 
 def md(d: date) -> str:

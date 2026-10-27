@@ -64,6 +64,25 @@ def test_parse():
     assert W.parse("今天我想了很多。", set()) is None
 
 
+def test_parse_stray_margin_tags():
+    """10-27 内测：没给 TA 的日记，模型照抄了「〔页边 #编号〕」/「〔页边 #无〕 …」，旧的拆法把它算进锁着那段。"""
+    assert W.parse("〔正文〕平常的一天。\n〔锁着〕\n无\n〔页边 #编号〕", set()).locked == ""
+    got = W.parse("〔正文〕平常的一天。\n〔锁着〕\n无\n〔页边 #无〕 这天的材料里没带 TA 的日记，页边就不留了。", set())
+    assert (got.locked, got.margins) == ("", {})
+    assert W.parse("〔正文〕一天。\n〔锁着〕\n其实我有点怕。\n〔页边 #编号〕", set()).locked == "其实我有点怕。"
+    assert DY.clean_locked("其实我有点怕。\n〔页边 #无〕 这天没有 TA 的日记") == "其实我有点怕。"
+
+
+def test_prompt_mentions_margin_only_with_their_diary():
+    bare = W.render_prompt("zh", NOW, DAY, "Asia/Singapore", W.Materials(transcript="小满：你好"), 600)
+    assert "页边" not in bare and "编号" not in bare
+    e = DY.Entry(id=7, account_id=None, companion_id=None, author="user", day=DAY, body="今天好累", locked="", private=False,
+                 margin="", margin_by=None, margin_at=None, code="", code_fails=0, code_locked_until=None, keyed_at=None,
+                 unlocked_at=None, told_unlocked=False, memory_id=None, created_at=NOW, updated_at=NOW)
+    full = W.render_prompt("zh", NOW, DAY, "Asia/Singapore", W.Materials(transcript="小满：你好", theirs=[e]), 600)
+    assert "〔页边 #7〕" in full and "#编号" not in full
+
+
 async def test_write_day_end_to_end(pool):
     e = Env(pool, [
         {"calls": [("memory_remember", {"content": "小满 10/1 第一次见表演老师，老师说她有 natural instinct", "importance": 7})]},

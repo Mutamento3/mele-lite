@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import date, timedelta
 
 from uuid import UUID
 
@@ -290,6 +290,38 @@ async def delete_conversation(conv: UUID, acc: UUID = Depends(account), a: Api =
         await a.deps.pool.execute("DELETE FROM memory_edits WHERE conversation_id = $1", conv)
         await a.deps.pool.execute("DELETE FROM conversations WHERE id = $1", conv)
     return Response(status_code=204)
+
+
+# ── 回声（10-27 内测：Host 也要看得到什么时候卷进账本、账本写了什么；跟 Lite 本机 LocalEcho 同一个样子）──
+
+@router.get("/companions/{cid}/echo")
+async def echo(cid: UUID, acc: UUID = Depends(account), a: Api = Depends(api)):
+    """这个 TA 每个窗口的账本：按天（新的在前）、腔调样本、上次卷的时刻、最近连着几次没卷成。没卷过的窗口不列。"""
+    await own_companion(a, acc, cid)
+    pool, out = a.deps.pool, []
+    for c in await accounts.list_conversations(pool, acc, cid):
+        days = await archive.get_ledger(pool, c.id)
+        if not days:
+            continue
+        st = await archive.get_state(pool, c.id)
+        at = st.get("ledger_at") or ((await pool.fetchval("SELECT max(updated_at) FROM ledger_days WHERE user_id = $1", c.id))
+                                     or c.last_at).isoformat()          # 这版以前卷的没记时刻：拿账本最后一次改动顶上
+        out.append({"conversation": str(c.id), "title": c.title, "alt_name": "",
+                    "days": [{"day": d.isoformat(), "text": t} for d, t in sorted(days.items(), reverse=True)],
+                    "samples": st.get("voice_samples", []), "at": at, "fails": int(st.get("ledger_fails", 0))})
+    return out
+
+
+@router.put("/conversations/{conv}/echo")
+async def edit_echo(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """改某一天的账 {day, text}；text 空 = 不要这一天。"""
+    await own_conversation(a, acc, conv)
+    try:
+        day = date.fromisoformat(str(body.get("day") or ""))
+    except ValueError:
+        raise HTTPException(400, "日子不对") from None
+    await archive.put_ledger(a.deps.pool, conv, {day: str(body.get("text") or "").strip()}, now=a.deps.now())
+    return {"ok": True}
 
 
 # ── 初见（09-28）──

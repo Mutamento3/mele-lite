@@ -656,8 +656,8 @@ struct CompanionSettingsView: View {
             Text("档位管 TA 自己想起你的频率。")
         }
         .needsHost()
-        if Lite.local {
-            localDiary
+        if Lite.local || (model.companions.first?.id != companion.id && store.keyID != nil) {
+            localDiary          // 本机：每个联系人；Host / 服务器：别的联系人（10-27，主联系人的在上面那格）
         }
     }
 
@@ -705,6 +705,8 @@ struct CompanionSettingsView: View {
         } header: { GlassHeader("日记") } footer: {
             if main {
                 Text("每天第一次打开 App 时，昨天你们聊过的话，TA 会写一篇昨天的日记；你那天写了日记，TA 会在页边留一句。用的是你自己的 key，写得越长越贵。")
+            } else if !Lite.local {
+                Text("打开后，每天凌晨等你睡着了，昨天你们聊过的话，TA 也会写一篇日记，在日记页多出 TA 的一本。你的日记只给主联系人读。用的是 TA 这把 key，多一个人写就多花一份。")
             } else {
                 Text("打开后，每天第一次打开 App 时，昨天你们聊过的话，TA 会写一篇昨天的日记，在日记页多出 TA 的一本。你的日记只给主联系人读。用的是你自己的 key，多一个人写就多花一份。")
             }
@@ -735,8 +737,8 @@ struct CompanionSettingsView: View {
                     Slider(value: Binding(get: { Double(n.wrappedValue) }, set: { n.wrappedValue = Int($0 / 5) * 5 }), in: 0...100, step: 5)
                 }
             }
-            // 回声（Lite 本机也卷了，10-04）：按天记的账本，默认收着，点开能改
-            if Lite.local {
+            // 回声（Lite 本机也卷了，10-04）：按天记的账本，默认收着，点开能改；10-27 Host 也有（服务器 /companions/{id}/echo）
+            if Lite.on {
                 NavigationLink {
                     EchoView(companion: companion).environmentObject(theme)
                 } label: {

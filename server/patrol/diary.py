@@ -101,7 +101,14 @@ async def run(deps, rooms, clock, now: datetime) -> str:
         log.info("diary for %s on %s: they never fell asleep before %s", comp, day, until)
         await ensure_clock(pool, acc, now)
         return "missed"
-    if not Settings.from_dict(await archive.get_settings(pool, comp)).diary_on:     # 关了：这晚不写，挂明晚
+    # 谁写：主联系人看 diary_on；别的联系人看 diary_also（10-27，Host 照 Lite 本机）。这晚已经写完的记在 spec.done 里
+    done = set(clock.spec.get("done", []))
+    targets = []
+    for i, c in enumerate(await accounts.list_companions(pool, acc)):
+        st = Settings.from_dict(await archive.get_settings(pool, c))
+        if str(c) not in done and (st.diary_on if i == 0 else st.diary_also):
+            targets.append(c)
+    if not targets:                                                                  # 都关了：这晚不写，挂明晚
         await ensure_clock(pool, acc, now)
         return "off"
     last = await last_user_at(pool, acc)
@@ -111,10 +118,13 @@ async def run(deps, rooms, clock, now: datetime) -> str:
     if (until_peak := await _free_peak(deps, acc, comp, now)) is not None and until_peak < until:
         await clock_store.reschedule(pool, clock.id, until_peak)       # 免费用户碰上 DeepSeek 高峰：等高峰过了再写（10-01 Aporia）
         return "waiting"
-    outcome = await write_day(deps, acc, comp, day, now)
+    outcomes = {c: await write_day(deps, acc, c, day, now, main=(c == comp)) for c in targets}
+    outcome = outcomes.get(comp) or next(iter(outcomes.values()))
+    again = [c for c, o in outcomes.items() if o in ("bad", "error")]
     tries = int(clock.spec.get("tries", 0)) + 1
-    if outcome in ("bad", "error") and tries < MAX_TRIES and now + RETRY < until:   # 交卷拆不出 / 模型出错：20 分钟后再来
-        await clock_store.set_spec(pool, clock.id, {**clock.spec, "tries": tries})
+    if again and tries < MAX_TRIES and now + RETRY < until:          # 交卷拆不出 / 模型出错：20 分钟后只重写这几个
+        done |= {str(c) for c in targets if c not in again}
+        await clock_store.set_spec(pool, clock.id, {**clock.spec, "tries": tries, "done": sorted(done)})
         await clock_store.reschedule(pool, clock.id, now + RETRY)
         return outcome
     await ensure_clock(pool, acc, now)
