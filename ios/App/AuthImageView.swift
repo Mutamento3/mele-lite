@@ -15,37 +15,48 @@ struct AuthImageView: View {
     /// 取图用的接口（SessionStore 起来时塞进来）
     nonisolated(unsafe) static var api: APIClient?
 
+    /// 缓存的名字（10-27 内测：搬到 Host 以后表情包的图和描述全乱了）。路径里的编号是各管各的——手机本机的 stickers/5
+    /// 跟 Host 上的 stickers/5 不是同一张，只按路径存就会拿本机那张顶上。连着 Host 时前面加上 Host 的地址；本机照旧，旧缓存还能用
+    static func key(_ urlPath: String) -> NSString {
+        #if LITE
+        guard let base = api?.baseURL, base.host != LocalHostProtocol.host else { return urlPath as NSString }
+        return "\(base.absoluteString)|\(urlPath)" as NSString
+        #else
+        return urlPath as NSString          // 正式版只有一个服务器
+        #endif
+    }
+
     /// 上传成功的那一刻把本地这张图先塞进缓存（之前自用的 App 09-01「照片好久才加载出来」）：
     /// 刚上传完的图不用再从服务器下载一遍。key 跟气泡里用的路径一字不差。
     static func seed(urlPath: String, data: Data) {
         guard !urlPath.isEmpty, let image = UIImage(data: data) else { return }
-        cache.setObject(image, forKey: urlPath as NSString)
+        cache.setObject(image, forKey: key(urlPath))
         writeDisk(urlPath: urlPath, data: data)
     }
 
     /// 提前把一张图拉进缓存
     static func prefetch(urlPath: String) {
-        guard !urlPath.isEmpty, cache.object(forKey: urlPath as NSString) == nil else { return }
+        guard !urlPath.isEmpty, cache.object(forKey: key(urlPath)) == nil else { return }
         if let disk = readDisk(urlPath: urlPath) {
-            cache.setObject(disk, forKey: urlPath as NSString)
+            cache.setObject(disk, forKey: key(urlPath))
             return
         }
         Task.detached(priority: .utility) {
             guard let (data, image) = await fetch(urlPath: urlPath) else { return }
-            cache.setObject(image, forKey: urlPath as NSString)
+            cache.setObject(image, forKey: key(urlPath))
             writeDisk(urlPath: urlPath, data: data)
         }
     }
 
     /// 拿到这张图本身（全屏查看用）
     static func image(urlPath: String) async -> UIImage? {
-        if let cached = cache.object(forKey: urlPath as NSString) { return cached }
+        if let cached = cache.object(forKey: key(urlPath)) { return cached }
         if let disk = readDisk(urlPath: urlPath) {
-            cache.setObject(disk, forKey: urlPath as NSString)
+            cache.setObject(disk, forKey: key(urlPath))
             return disk
         }
         guard let (data, loaded) = await fetch(urlPath: urlPath) else { return nil }
-        cache.setObject(loaded, forKey: urlPath as NSString)
+        cache.setObject(loaded, forKey: key(urlPath))
         writeDisk(urlPath: urlPath, data: data)
         return loaded
     }
@@ -65,7 +76,7 @@ struct AuthImageView: View {
     }
 
     private static func diskFile(urlPath: String) -> URL {
-        let digest = SHA256.hash(data: Data(urlPath.utf8)).map { String(format: "%02x", $0) }.joined()
+        let digest = SHA256.hash(data: Data((key(urlPath) as String).utf8)).map { String(format: "%02x", $0) }.joined()
         return diskDir.appendingPathComponent(digest)
     }
 
@@ -104,12 +115,12 @@ struct AuthImageView: View {
 
     private func load() async {
         failed = false   // 换了一张（urlPath 变了）就别卡在上一张的「没下成」上
-        if let cached = Self.cache.object(forKey: urlPath as NSString) {
+        if let cached = Self.cache.object(forKey: Self.key(urlPath)) {
             image = cached
             return
         }
         if let disk = Self.readDisk(urlPath: urlPath) {
-            Self.cache.setObject(disk, forKey: urlPath as NSString)
+            Self.cache.setObject(disk, forKey: Self.key(urlPath))
             image = disk
             return
         }
@@ -117,7 +128,7 @@ struct AuthImageView: View {
             failed = true
             return
         }
-        Self.cache.setObject(loaded, forKey: urlPath as NSString)
+        Self.cache.setObject(loaded, forKey: Self.key(urlPath))
         Self.writeDisk(urlPath: urlPath, data: data)
         image = loaded
     }

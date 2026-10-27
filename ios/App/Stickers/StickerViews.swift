@@ -168,8 +168,8 @@ struct StickerRoomView: View {
         let key = "sticker.ocrTried"
         var tried = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
         var changed = false
-        for s in stickers where s.caption.isEmpty && !tried.contains("\(s.id)") {
-            tried.insert("\(s.id)")
+        for s in stickers where s.caption.isEmpty && !tried.contains(AuthImageView.key(s.path) as String) {
+            tried.insert(AuthImageView.key(s.path) as String)        // 跟图片缓存一样分本机 / Host（编号各管各的，10-27）
             guard let d = try? await model.api.data(s.path),
                   let text = await Task.detached(priority: .utility, operation: { StickerOCR.text(in: d) }).value else { continue }
             if (try? await model.api.raw("PATCH", "stickers/\(s.id)", json: ["caption": text])) != nil { changed = true }
